@@ -1,0 +1,18 @@
+find_program(AVR_C_COMPILER avr-gcc REQUIRED)
+find_program(AVR_CXX_COMPILER avr-g++ REQUIRED)
+find_program(AVR_OBJCOPY avr-objcopy REQUIRED)
+find_program(AVR_SIZE avr-size REQUIRED)
+find_program(AVRDUDE avrdude)
+find_program(SREC_CAT srec_cat REQUIRED)
+
+set(CMAKE_SYSTEM_NAME Generic)
+set(CMAKE_SYSTEM_PROCESSOR avr)
+set(CMAKE_C_COMPILER ${AVR_C_COMPILER})
+set(CMAKE_CXX_COMPILER ${AVR_CXX_COMPILER})
+
+foreach(mmcu IN ITEMS atmega16m1 atmega32m1 atmega64m1 atmega32c1 at90can128)
+    foreach(freq IN ITEMS 16000000 12000000 4000000)
+        add_library( h9can_${mmcu}_${freq} OBJECT can.c  )
+        target_compile_options( h9can_${mmcu}_${freq} PRIVATE -mmcu=${mmcu} -DF_CPU=${freq}UL)
+    endforeach()
+endforeach()
