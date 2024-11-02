@@ -21,6 +21,9 @@
 #define CAN_TX_BUF_SIZE 8
 #define CAN_TX_BUF_INDEX_MASK 0x07
 
+#define STR_HELPER(x) #x
+#define STR(x) STR_HELPER(x)
+
 typedef struct {
     uint8_t canidt1;
     uint8_t canidt2;

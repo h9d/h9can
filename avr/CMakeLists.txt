@@ -10,9 +10,26 @@ set(CMAKE_SYSTEM_PROCESSOR avr)
 set(CMAKE_C_COMPILER ${AVR_C_COMPILER})
 set(CMAKE_CXX_COMPILER ${AVR_CXX_COMPILER})
 
-foreach(mmcu IN ITEMS atmega16m1 atmega32m1 atmega64m1 atmega32c1 at90can128)
-    foreach(freq IN ITEMS 16000000 12000000 4000000)
+include(${CMAKE_CURRENT_LIST_DIR}/../cmake/avr_alt_setting.cmake)
+
+foreach(mmcu IN LISTS avr_mmcus)
+    foreach(freq IN LISTS avr_freqs)
         add_library( h9can_${mmcu}_${freq} OBJECT can.c  )
-        target_compile_options( h9can_${mmcu}_${freq} PRIVATE -mmcu=${mmcu} -DF_CPU=${freq}UL)
+        target_compile_options( h9can_${mmcu}_${freq} PRIVATE
+                -mmcu=${mmcu}
+                -DF_CPU=${fcpu_${freq}}
+                -DBOOTSTART=${bootstart_${mmcu}}
+                -Os
+                -gdwarf-2
+                -funsigned-char
+                -funsigned-bitfields
+                -fpack-struct
+                -fshort-enums
+                -Wall
+                -Wno-unknown-pragmas
+                -Wstrict-prototypes
+                -Wundef
+                -std=gnu11
+        )
     endforeach()
 endforeach()

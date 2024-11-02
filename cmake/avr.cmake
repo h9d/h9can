@@ -6,5 +6,5 @@ include_directories(${CMAKE_CURRENT_LIST_DIR}/../include)
 
 set(LINKER_SCRIPT ${CMAKE_CURRENT_LIST_DIR}/../avr/custom_avr5.lds)
 
-target_sources(${PROJECT_NAME} PRIVATE $<TARGET_OBJECTS:h9can_${MMCU}_${FREQ}>)
-#set_target_properties(${PROJECT_NAME} PROPERTIES LINK_DEPENDS ${LINKER_SCRIPT} LINK_FLAGS "-T ${LINKER_SCRIPT}")
+math(EXPR FREQ_IN_M ${FREQ}/1000000)
+target_sources(${PROJECT_NAME} PRIVATE $<TARGET_OBJECTS:h9can_${MMCU}_${FREQ_IN_M}M>)
