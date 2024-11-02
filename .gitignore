@@ -6,7 +6,8 @@
 *.out
 
 # CMake
-cmake-build-debug/
+.cmake/
+cmake-build-debug*
 CMakeFiles
 build/
 CMakeCache.txt

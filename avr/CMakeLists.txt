@@ -12,10 +12,10 @@ set(CMAKE_CXX_COMPILER ${AVR_CXX_COMPILER})
 
 include(${CMAKE_CURRENT_LIST_DIR}/../cmake/avr_alt_setting.cmake)
 
-foreach(mmcu IN LISTS avr_mmcus)
-    foreach(freq IN LISTS avr_freqs)
-        add_library( h9can_${mmcu}_${freq} OBJECT can.c  )
-        target_compile_options( h9can_${mmcu}_${freq} PRIVATE
+foreach (mmcu IN LISTS avr_mmcus)
+    foreach (freq IN LISTS avr_freqs)
+        add_library(h9can_${mmcu}_${freq} OBJECT can.c)
+        target_compile_options(h9can_${mmcu}_${freq} PRIVATE
                 -mmcu=${mmcu}
                 -DF_CPU=${fcpu_${freq}}
                 -DBOOTSTART=${bootstart_${mmcu}}
@@ -30,6 +30,6 @@ foreach(mmcu IN LISTS avr_mmcus)
                 -Wstrict-prototypes
                 -Wundef
                 -std=gnu11
-        )
-    endforeach()
-endforeach()
+                )
+    endforeach ()
+endforeach ()

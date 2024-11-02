@@ -1,9 +1,9 @@
+// SPDX-License-Identifier: MIT
 /*
- * h9avr-bootloader
+ * H9 CAN bootloader for AVR
  *
- * Created by SQ8KFH on 2019-07-09.
+ * Copyright (C) 2019-2024 Kamil Pałkowski
  *
- * Copyright (C) 2019-2020 Kamil Palkowski. All rights reserved.
  */
 
 /* --------------------------------------------------------------------------- *
@@ -12,8 +12,8 @@
  * edit the original file NOT THIS FILE.                                       *
  * --------------------------------------------------------------------------- */
 
-#ifndef _CONFIG_H_
-#define _CONFIG_H_
+#ifndef _BOOTLOADERE_CONFIG_H_
+#define _BOOTLOADERE_CONFIG_H_
 
 #define BOOTLOADER_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
 #define BOOTLOADER_VERSION_MINOR @PROJECT_VERSION_MINOR@
