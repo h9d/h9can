@@ -22,7 +22,18 @@ void CAN_set_mob_for_remote_node1(uint16_t remote_node_id, uint8_t all_msg_group
 void CAN_set_mob_for_remote_node2(uint16_t remote_node_id, uint8_t all_msg_group);
 void CAN_set_mob_for_remote_node3(uint16_t remote_node_id, uint8_t all_msg_group);
 
+
+/**
+ * @retval 0 - FAIL - sanding in proggres and buffer is full
+ * @retval 1 - OK
+ * @retval 2 - added to buffer
+ */
 uint8_t CAN_put_msg(h9msg_t *cm);
+
+/**
+ * @retval 0 - FAIL - sanding in proggres
+ * @retval 1 - OK
+ */
 uint8_t CAN_try_put_msg(h9msg_t *cm);
 uint8_t CAN_get_msg(h9msg_t*cm);
 

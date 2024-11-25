@@ -79,14 +79,6 @@
 // 31 30 29 | 28 27 26 25 24 23 22 21 | 20 19 18 17 16 15 14 13 | 12 11 10 09 08 07 06 05 | 04 03 02 01 00
 // -- -- -- | pp ty ty ty ty ty se se | se se se ds ds ds ds ds | ds ds ds ds so so so so | so so so so so
 
-#define H9MSG_ERROR_INVALID_MSG 1
-#define H9MSG_ERROR_BOOTLOADER_UNSUPPORTED 2
-#define H9MSG_ERROR_INVALID_REGISTER 3
-#define H9MSG_ERROR_READ_ONLY_REGISTER 4
-#define H9MSG_ERROR_WRITE_ONLY_REGISTER 5
-#define H9MSG_ERROR_REGISTER_SIZE_MISMATCH 6
-#define H9MSG_ERROR_NODE_SPECIFIC_ERROR 0xff
-
 struct h9msg {
     uint8_t priority :H9MSG_PRIORITY_BIT_LENGTH;
     uint8_t type :H9MSG_TYPE_BIT_LENGTH;
