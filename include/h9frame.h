@@ -11,6 +11,14 @@
 
 #include <stdint.h>
 
+#if defined(__cplusplus)
+#define H9FRAME_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define H9FRAME_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#else
+#define H9FRAME_STATIC_ASSERT(cond, msg) typedef char h9frame_static_assert_failed[(cond) ? 1 : -1]
+#endif
+
 #define H9FRAME_TYPE_BIT_LENGTH 5
 #define H9FRAME_FLAGS_BITS_LENGTH  3
 #define H9FRAME_SEQNUM_BIT_LENGTH 5
@@ -120,7 +128,7 @@ struct h9frame {
     uint8_t data[8];
 };
 
-_Static_assert(
+H9FRAME_STATIC_ASSERT(
     H9FRAME_TYPE_BIT_LENGTH + H9FRAME_ID_BIT_LENGTH + H9FRAME_FLAGS_BITS_LENGTH + H9FRAME_ID_BIT_LENGTH + H9FRAME_SEQNUM_BIT_LENGTH == 29, "CAN id must be 29-bits"
 );
 
