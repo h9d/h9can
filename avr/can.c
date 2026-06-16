@@ -2,18 +2,22 @@
 /*
  * H9 CAN protocol implementation for AVR
  *
- * Copyright (C) 2017-2024 Kamil Pałkowski
+ * Copyright (C) 2017-2026 Kamil Pałkowski
  *
  */
 
 #include <string.h>
 #include <avr/io.h>
+#include <avr/eeprom.h>
 #include <avr/interrupt.h>
 #include <avr/wdt.h>
 
 #include <h9def.h>
 
-#include "avr/can.h"
+#include "h9avr/can.h"
+#include "h9avr/node_id.h"
+
+#include <errno.h>
 
 #define CAN_RX_BUF_SIZE 16
 #define CAN_RX_BUF_INDEX_MASK 0x0F
@@ -41,41 +45,355 @@ static can_buf_t can_tx_buf[CAN_TX_BUF_SIZE];
 static volatile uint8_t can_tx_buf_top = 0;
 static volatile uint8_t can_tx_buf_bottom = 0;
 
-volatile uint16_t can_node_id;
+volatile uint8_t can_node_id;
+#ifdef __AVR__
 static uint8_t reset_reason __attribute__ ((section (".noinit")));
-static uint16_t ee_node_id __attribute__((section(".eepromfixed"))) = H9MSG_BROADCAST_ID - 1;
+#else
+static uint8_t reset_reason;
+#endif
 
 static struct {
     uint16_t node_type;
     char hardware_revision;
     uint16_t version_major;
     uint16_t version_minor;
-    char build_info[H9MSG_MAX_REGISTER_SIZE];
+    uint16_t version_patch;
+    char build_info[H9FRAME_MAX_REGISTER_SIZE];
 } node_info;
 
-static void read_node_id(void);
-static void write_node_id(uint16_t id);
-static uint8_t calc_can_id1(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id);
-static uint8_t calc_can_id2(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id);
-static uint8_t calc_can_id3(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id);
-static uint8_t calc_can_id4(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id);
-static void set_CAN_id(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id);
-static void set_CAN_id_mask(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id);
+/* --- Forward declarations --- */
 
-/* for software reset */
+#ifdef __AVR__
+static void __attribute__((noreturn)) mcu_reset(void);
+#else
+void __attribute__((weak)) mcu_reset(void);
+#endif
+#ifdef __AVR__
+static void set_mandatory_message_fields(h9frame_t *cm);
+#else
+void set_mandatory_message_fields(h9frame_t *cm);
+#endif
+static void calc_can_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, h9frame_t *cm);
+static void calc_can_unicast_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, uint8_t type, uint8_t src, uint8_t flags, uint8_t dst, uint8_t seq);
+static void calc_can_broadcast_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, uint8_t type, uint8_t src, uint16_t node_type);
+static void set_CAN_id(h9frame_t *cm);
+static void set_CAN_unicast_id(uint8_t type, uint8_t flags, uint8_t src, uint8_t dst, uint8_t seq);
+static void set_CAN_unicast_id_mask(uint8_t type, uint8_t flags, uint8_t src, uint8_t dst, uint8_t seq);
+static void set_CAN_broadcast_id(uint8_t type, uint8_t src, uint16_t node_type);
+static void set_CAN_broadcast_id_mask(uint8_t type, uint8_t src, uint16_t node_type);
+static void send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t *value, size_t length);
+static void send_reg_value1(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value);
+static void send_reg_value2(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2);
+static void send_reg_value3(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3);
+static void send_reg_value4(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4);
+static void send_reg_value6(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4, uint8_t value5, uint8_t value6);
+static void CAN_send_node_info_broadcast(uint8_t turn_on);
+static void process_standard_reg(h9frame_t *cm);
+
+/* ======================== PUBLIC FUNCTIONS ======================== */
+
+void CAN_init(uint16_t node_type, char hardware_rev, uint16_t version_major, uint16_t version_minor, uint16_t version_patch, const char *build_info) {
+    node_info.node_type = node_type;
+    node_info.hardware_revision = hardware_rev;
+    node_info.version_major = version_major;
+    node_info.version_minor = version_minor;
+    node_info.version_patch = version_patch;
+    strncpy(node_info.build_info, build_info, H9FRAME_MAX_REGISTER_SIZE);
+
+    uint16_t tmp_node_type = 0;
+    can_node_id = read_node_id(&tmp_node_type);
+
+    if (tmp_node_type != node_type) {
+        write_node_id(can_node_id, node_type);
+    }
+
+    CANGCON = ( 1 << SWRES );   // Software reset
+    CANTCON = 0x00;             // CAN timing prescaler set to 0;
+
+#if F_CPU == 4000000UL
+    CANBT1 = 0x06;
+    CANBT2 = 0x04;
+    CANBT3 = 0x13;
+#elif F_CPU == 12000000UL
+    CANBT1 = 0x16;
+    CANBT2 = 0x04;
+    CANBT3 = 0x13;
+#elif F_CPU == 16000000UL
+    CANBT1 = 0x1e;
+    CANBT2 = 0x04;
+    CANBT3 = 0x13;
+#else
+#error "Please specify F_CPU"
+#endif
+
+    for ( int8_t mob=0; mob<6; mob++ ) {
+        CANPAGE = ( mob << MOBNB0 ); // Selects Message Object 0-5
+        CANCDMOB = 0x00;             // Disable mob
+        CANSTMOB = 0x00;             // Clear mob status register;
+    }
+
+    //select mob 1 for unicast
+    CANPAGE = 0x01 << MOBNB0;
+    set_CAN_unicast_id(H9FRAME_UNICAST_MSG_TYPE_GROUP, 0, 0, can_node_id, 0);
+    set_CAN_unicast_id_mask(H9FRAME_UNICAST_MSG_TYPE_GROUP_MASK, 0, 0, H9FRAME_ID_MASK, 0);
+    CANIDM4 |= 1 << IDEMSK; // set filter
+    CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
+
+    //select mob 2 for broadcast
+    CANPAGE = 0x02 << MOBNB0;
+    set_CAN_broadcast_id(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, 0);
+    set_CAN_broadcast_id_mask(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, H9FRAME_NODE_TYPE_MASK);
+    CANIDM4 |= 1 << IDEMSK; // set filter
+    CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
+
+    CANPAGE = 0x03 << MOBNB0;
+    set_CAN_broadcast_id(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, node_type);
+    set_CAN_broadcast_id_mask(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, H9FRAME_NODE_TYPE_MASK);
+    CANIDM4 |= 1 << IDEMSK; // set filter
+    CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
+
+    CANIE2 = ( 1 << IEMOB0 ) | ( 1 << IEMOB1 ) | ( 1 << IEMOB2 ) | ( 1 << IEMOB3 ); //interupt mob 0 1 2 3
+
+    CANGIE = (1<<ENBOFF) | (1<<ENIT) | (1<<ENRX) | (1<<ENTX) | (1<<ENERR) | (1<<ENBX) | (1<<ENERG);
+    CANGCON = 1<<ENASTB;
+}
+
+void CAN_send_turned_on_broadcast(void) {
+    CAN_send_node_info_broadcast(1);
+}
+
+void CAN_set_msg_filter_1(uint8_t remote_node_id, uint8_t remote_node_id_active, uint16_t broadcast_group, uint8_t broadcast_group_active) {
+    CANPAGE = 0x04 << MOBNB0; //select mob 4
+
+    uint8_t node_id_mask = remote_node_id_active ? H9FRAME_ID_MASK : 0;
+    uint16_t node_type_mask = broadcast_group_active ? H9FRAME_NODE_TYPE_MASK : 0;
+
+    set_CAN_broadcast_id(H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, remote_node_id, broadcast_group);
+    set_CAN_broadcast_id_mask(H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP_MASK, node_id_mask, node_type_mask);
+
+    CANIDM4 |= 1 << IDEMSK; // set filter
+    CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
+
+    CANIE2 |= 1 << IEMOB3;
+}
+
+void CAN_set_msg_filter_2(uint8_t remote_node_id, uint8_t remote_node_id_active, uint16_t broadcast_group, uint8_t broadcast_group_active) {
+    CANPAGE = 0x05 << MOBNB0; //select mob 5
+
+    uint8_t node_id_mask = remote_node_id_active ? H9FRAME_ID_MASK : 0;
+    uint16_t node_type_mask = broadcast_group_active ? H9FRAME_NODE_TYPE_MASK : 0;
+
+    set_CAN_broadcast_id(H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, remote_node_id, broadcast_group);
+    set_CAN_broadcast_id_mask(H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP_MASK, node_id_mask, node_type_mask);
+
+    CANIDM4 |= 1 << IDEMSK; // set filter
+    CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
+
+    CANIE2 |= 1 << IEMOB4;
+}
+
+uint8_t CAN_try_put_msg(h9frame_t *cm) {
+    set_mandatory_message_fields(cm);
+    uint8_t sreg = SREG;
+    cli();
+    CANPAGE = 0 << MOBNB0;              // Select MOb0 for transmission
+
+    if (CANEN2 & ( 1 << ENMOB0 )) {
+        SREG = sreg;
+        return 0;
+    }
+
+    CANSTMOB = 0x00;                    // Clear mob status register
+
+    set_CAN_id(cm);
+
+    for (uint8_t idx = 0; idx < cm->dlc; ++idx) {
+        CANMSG = cm->data[idx];
+    }
+
+    CANCDMOB = (1 << CONMOB0) | (1 << IDE) | (cm->dlc & 0x0f);
+    SREG = sreg;
+    return 1;
+}
+
+uint8_t __attribute__((weak)) CAN_put_msg(h9frame_t *cm) {
+    cli();
+    uint8_t ret = 0;
+    if (CAN_try_put_msg(cm)) {
+        ret = 1;
+    }
+    else {
+        uint8_t tmp_idx = (uint8_t) ((can_tx_buf_top + 1) & CAN_TX_BUF_INDEX_MASK);
+
+        if (can_tx_buf_bottom != tmp_idx) {
+            calc_can_id(&can_tx_buf[can_tx_buf_top].canidt1, &can_tx_buf[can_tx_buf_top].canidt2, &can_tx_buf[can_tx_buf_top].canidt3, &can_tx_buf[can_tx_buf_top].canidt4, cm);
+
+            for (uint8_t idx = 0; idx < cm->dlc; ++idx)
+                can_tx_buf[can_tx_buf_top].data[idx] = cm->data[idx];
+
+            can_tx_buf[can_tx_buf_top].cancdmob = cm->dlc & 0x0f;
+
+            can_tx_buf_top = tmp_idx;
+            ret = 2;
+        }
+    }
+    sei();
+    return ret;
+}
+
+void send_command_error(uint8_t errno, uint8_t destination, uint8_t seqnum) {
+    h9frame_t cm;
+    cm.type = H9FRAME_TYPE_COMMAND_ERROR;
+    cm.unicast.flags = 0;
+    cm.unicast.destination_id = destination;
+    cm.unicast.seqnum = seqnum;
+
+    cm.data[0] = errno;
+    cm.dlc = 1;
+    CAN_put_msg(&cm);
+}
+
+uint8_t process_msg(h9frame_t *cm) {
+    /* --- BROADCAST --- */
+    if (cm->type & H9FRAME_UNICAST_BROADCAST_BIT) {
+        if (cm->type == H9FRAME_TYPE_DISCOVER || cm->type == H9FRAME_TYPE_GROUP_RESET) {
+            if (cm->broadcast.group == node_info.node_type || cm->broadcast.group == H9FRAME_BROADCAST_ID) {
+                if (cm->type == H9FRAME_TYPE_DISCOVER) {
+                    CAN_send_node_info_broadcast(0);
+                    return 0;
+                }
+                else if (cm->type == H9FRAME_TYPE_GROUP_RESET) {
+                    mcu_reset();
+                    return 0;
+                }
+            }
+            else {
+                // INVALID_MSG but we don't answere on broadcast
+                return 0;
+            }
+        }
+
+        return 2;
+    }
+    /* --- UNICAST --- */
+    else {
+        if (cm->unicast.destination_id != can_node_id) {
+            return 0; //not for me
+        }
+
+        /* -- RCV BOOTLOADER MSG -- */
+        if (cm->type <= H9FRAME_TYPE_PAGE_FILL_BREAK) {
+            send_command_error(H9FRAME_ERROR_INVALID_FRAME, cm->source_id, cm->unicast.seqnum);
+            return 0;
+        }
+
+        /* -- MULTIPLE MSG -- */
+        if (cm->unicast.flags != 0 && cm->type != H9FRAME_TYPE_SET_REG && cm->type != H9FRAME_TYPE_REG_VALUE) {
+            send_command_error(H9FRAME_ERROR_INVALID_FRAME, cm->source_id, cm->unicast.seqnum);
+            return 0;
+        }
+
+        if (cm->type == H9FRAME_TYPE_NODE_RESET) {
+            mcu_reset();
+            return 0;
+        }
+        else if (cm->type == H9FRAME_TYPE_NODE_UPGRADE && cm->dlc == 0) {
+#ifdef BOOTSTART
+            cli();
+            __asm__ volatile ( "jmp " STR(BOOTSTART) );
+#else
+#warning "Node upgrade (bootloader) disable"
+            send_command_error(H9FRAME_ERROR_BOOTLOADER_UNSUPPORTED, cm->source_id, cm->unicast.seqnum);
+            return 0;
+#endif //BOOTSTART
+        }
+        else if (cm->type == H9FRAME_TYPE_SET_REG || cm->type == H9FRAME_TYPE_GET_REG || cm->type == H9FRAME_TYPE_SET_BIT || cm->type == H9FRAME_TYPE_CLEAR_BIT) {
+            /* --- STANDARD REG OPERATION -- */
+            if (cm->dlc > 0 && cm->data[0] < 10) {
+                process_standard_reg(cm);
+                return 0;
+            }
+            else {
+                return 1;
+            }
+        }
+        return 1; //THEORETICALLY H9FRAME_TYPE_COMMAND_ERROR OR H9FRAME_TYPE_REG_VALUE
+    }
+}
+// 31 30 29 | 28     27 26 25 24 23 22 21 | 20 19 18 17 16 15 14 13 | 12 11 10 09 08 07 06 05 | 04 03 02 01 00
+// -- -- -- | ty_(0) ty ty ty ty so so so | so so so so so fl fl fl | ds ds ds ds ds ds ds ds | sq sq sq sq sq
+// -- -- -- | ty_(1) ty ty ty ty so so so | so so so so so nt nt nt | nt nt nt nt nt nt nt nt | nt nt nt nt nt
+uint8_t CAN_get_msg(h9frame_t *cm) {
+    if (can_rx_buf_top != can_rx_buf_bottom) {
+        cm->type = can_rx_buf[can_rx_buf_bottom].canidt1 >> 3;
+        cm->source_id = (can_rx_buf[can_rx_buf_bottom].canidt1 << 5) | (can_rx_buf[can_rx_buf_bottom].canidt2 >> 3);
+        if (cm->type & H9FRAME_UNICAST_BROADCAST_BIT) {
+            cm->broadcast.group = (can_rx_buf[can_rx_buf_bottom].canidt2 << 13) | (can_rx_buf[can_rx_buf_bottom].canidt3 << 5) | ((can_rx_buf[can_rx_buf_bottom].canidt4 >> 3) & 0x1f);
+        }
+        else {
+            cm->unicast.flags = ((can_rx_buf[can_rx_buf_bottom].canidt2) & 0x03);
+            cm->unicast.destination_id  = can_rx_buf[can_rx_buf_bottom].canidt3;
+            cm->unicast.seqnum = can_rx_buf[can_rx_buf_bottom].canidt4 >> 3;
+        }
+        cm->dlc = can_rx_buf[can_rx_buf_bottom].cancdmob & 0x0f;
+        uint8_t idx = 0;
+        for (; idx < 8; ++idx)
+            cm->data[idx] = can_rx_buf[can_rx_buf_bottom].data[idx];
+
+        can_rx_buf_bottom = (uint8_t)((can_rx_buf_bottom + 1) & CAN_RX_BUF_INDEX_MASK);
+
+        return process_msg(cm);
+    }
+    return 0;
+}
+
+void CAN_init_new_msg(h9frame_t *fr) {
+    fr->source_id = can_node_id;
+    fr->unicast.flags = 0;
+    fr->unicast.destination_id = 0;
+    fr->unicast.seqnum = 0;
+    fr->broadcast.group = 0;
+    fr->dlc = 0;
+}
+
+void CAN_init_response_msg(const h9frame_t *req, h9frame_t *res) {
+    res->unicast.seqnum = req->unicast.seqnum;
+    switch (req->type) {
+        case H9FRAME_TYPE_GET_REG:
+        case H9FRAME_TYPE_SET_REG:
+        case H9FRAME_TYPE_SET_BIT:
+        case H9FRAME_TYPE_CLEAR_BIT:
+            res->type = H9FRAME_TYPE_REG_VALUE;
+            break;
+        case H9FRAME_TYPE_DISCOVER:
+            res->type = H9FRAME_TYPE_NODE_INFO;
+            break;
+        default:
+            break;
+    }
+    res->source_id = can_node_id;
+    res->unicast.destination_id = req->source_id;
+    res->dlc = 0;
+}
+
+/* ======================== STATIC FUNCTIONS ======================== */
+
+/* Runs before main() in .init3 to capture and clear MCUSR before watchdog disable */
+#ifdef __AVR__
 __attribute__((naked)) __attribute__((section(".init3"))) void wdt_init(void) {
     if (MCUSR == ((1 << PORF) | (1 << BORF))) reset_reason = NODE_RESET_BY_POWER_ON;
     else if (MCUSR == (1 << WDRF)) reset_reason = NODE_RESET_BY_WATCHDOG;
     else if (MCUSR == (1 << BORF)) reset_reason = NODE_RESET_BY_BROWN_OUT;
     else if (MCUSR == (1 << EXTRF)) reset_reason = NODE_RESET_BY_EXTERNAL_SOURCE;
-    else reset_reason = NODE_RESET_BY_UNKNOW;
+    else reset_reason = NODE_RESET_BY_UNKNOWN;
 
     MCUSR = 0;
     wdt_disable();
     return;
 }
+#endif /* __AVR__ */
 
-
+#ifdef __AVR__
 #if defined (__AVR_AT90CAN128__)
 ISR(CANIT_vect) {
 #else
@@ -125,246 +443,207 @@ ISR(CAN_INT_vect) {
     //other interrupt
     CANGIT |= (cangit & 0x7f);
 }
+#endif /* __AVR__ */
 
-
-uint8_t process_msg(h9msg_t *cm) {
-    if ((cm->type & H9MSG_NODE_STANDARD_MSG_BROADCAST_SUBGROUP_MASK) == H9MSG_NODE_STANDARD_MSG_BROADCAST_SUBGROUP
-             && (cm->destination_id == can_node_id || cm->destination_id == H9MSG_BROADCAST_ID)) {
-        if (cm->type == H9MSG_TYPE_DISCOVER && cm->dlc == 0) {
-            h9msg_t cm_res;
-            CAN_init_response_msg(cm, &cm_res);
-            cm_res.dlc = 8;
-            cm_res.data[0] = (node_info.node_type >> 8) & 0xff;
-            cm_res.data[1] = (node_info.node_type) & 0xff;
-            cm_res.data[2] = (node_info.version_major >> 8);
-            cm_res.data[3] = node_info.version_major & 0xff;
-            cm_res.data[4] = (node_info.version_minor >> 8) & 0xff;
-            cm_res.data[5] = node_info.version_minor & 0xff;
-            cm_res.data[6] = node_info.hardware_revision;
-            cm_res.data[7] = reset_reason;
-            CAN_put_msg(&cm_res);
-            return 0;
-        }
-        else if (cm->type == H9MSG_TYPE_NODE_RESET && cm->dlc == 0) {
-            cli();
-            do {
-                wdt_enable(WDTO_15MS);
-                for(;;) {
-                }
-            } while(0);
-        }
-    }
-    else if ((cm->type & H9MSG_NODE_STANDARD_MSG_GROUP_MASK) == H9MSG_NODE_STANDARD_MSG_GROUP && cm->destination_id == can_node_id) {
-        if (cm->type == H9MSG_TYPE_SET_REG && cm->dlc > 1) {
-            if (cm->data[0] >= 10)
-                return 1;
-            h9msg_t cm_res;
-            CAN_init_response_msg(cm, &cm_res);
-            cm_res.dlc = 2;
-            cm_res.data[0] = cm->data[0];
-            if (cm_res.data[0] == NODE_ID_STD_REGISTER) {
-                if (cm->dlc == 3) {
-                    write_node_id((cm->data[1] & 0x01) << 8 | cm->data[2]);
-
-                    cm_res.data[1] = (can_node_id >> 8) & 0x01;
-                    cm_res.data[2] = (can_node_id) & 0xff;
-                    cm_res.dlc = 3;
-                }
-                else {
-                    cm_res.type = H9MSG_TYPE_ERROR;
-                    cm_res.data[0] = H9FRAME_ERROR_REGISTER_SIZE_MISMATCH;
-                    cm_res.dlc = 1;
-                }
-            }
-            else if (cm_res.data[0] < NODE_STD_REGISTER_LAST) {
-                cm_res.type = H9MSG_TYPE_ERROR;
-                cm_res.data[0] = H9FRAME_ERROR_READ_ONLY_REGISTER;
-                cm_res.dlc = 1;
-            }
-            else {
-                cm_res.type = H9MSG_TYPE_ERROR;
-                cm_res.data[0] = H9FRAME_ERROR_INVALID_REGISTER;
-                cm_res.dlc = 1;
-            }
-            CAN_put_msg(&cm_res);
-            return 0;
-        }
-        else if (cm->type == H9MSG_TYPE_GET_REG && cm->dlc == 1) {
-            if (cm->data[0] >= 10)
-                return 1;
-            h9msg_t cm_res;
-            CAN_init_response_msg(cm, &cm_res);
-            cm_res.dlc = 2;
-            cm_res.data[0] = cm->data[0];
-            switch (cm_res.data[0]) {
-                case NODE_TYPE_STD_REGISTER:
-                    cm_res.data[1] = (node_info.node_type >> 8) & 0xff;
-                    cm_res.data[2] = (node_info.node_type ) & 0xff;
-                    cm_res.dlc = 3;
-                    break;
-                case NODE_HARDWARE_REVISION_STD_REGISTER:
-                    cm_res.data[1] = 'a';
-                    cm_res.dlc = 2;
-                    break;
-                case NODE_VERSION_STD_REGISTER:
-                    cm_res.data[1] = (node_info.version_major >> 8);
-                    cm_res.data[2] = node_info.version_major & 0xff;
-                    cm_res.data[3] = (node_info.version_minor >> 8) & 0xff;
-                    cm_res.data[4] = node_info.version_minor & 0xff;
-                    cm_res.dlc = 5;
-                    break;
-                case NODE_BUILD_INFO_STD_REGISTER:
-                //TODO: add multi-message value with message counter on 7 byte
-                    cm_res.dlc = 7;
-                    char *tmp = node_info.build_info;
-                    uint8_t i = 0;
-                    for (; tmp[i] && i < 6; ++i) {
-                        cm_res.data[1 + i] = tmp[i];
-                    }
-                    for (; i < 6; ++i) {
-                        cm_res.data[1 + i] = '\0';
-                    }
-                    break;
-                case NODE_ID_STD_REGISTER:
-                    cm_res.data[1] = (can_node_id >> 8) & 0x01;
-                    cm_res.data[2] = (can_node_id) & 0xff;
-                    cm_res.dlc = 3;
-                    break;
-                case NODE_MCU_TYPE_STD_REGISTER:
-#if defined (__AVR_ATmega16M1__)
-                    cm_res.data[1] = NODE_MCU_ATMEGA16M1;
-#elif defined (__AVR_ATmega32M1__)
-                    cm_res.data[1] = NODE_MCU_ATMEGA32M1;
-#elif defined (__AVR_ATmega64M1__)
-                    cm_res.data[1] = NODE_MCU_ATMEGA64M1;
-#elif defined (__AVR_AT90CAN128__)
-                    cm_res.data[1] = NODE_MCU_AT90CAN128;
-#elif defined (__AVR_ATmega32C1__)
-                    cm_res.data[1] = NODE_MCU_ATMEGA32C1;
+#ifdef __AVR__
+static void __attribute__((noreturn)) mcu_reset(void) {
 #else
-#error Unsupported MCU
+void __attribute__((weak)) mcu_reset(void) {
 #endif
-                    cm_res.dlc = 2;
-                    break;
-                case NODE_SN_STD_REGISTER: //CPU serial ID
-                    cm_res.data[1] = 0;
-                    cm_res.data[2] = 0;
-                    cm_res.data[3] = 0;
-                    cm_res.data[4] = 0;
-                    cm_res.dlc = 5;
-                case NODE_RESET_REASON_STD_REGISTER:
-                    cm_res.data[1] = reset_reason;
-                    cm_res.dlc = 2;
-                    break;
-                default:
-                    cm_res.type = H9MSG_TYPE_ERROR;
-                    cm_res.data[0] = H9FRAME_ERROR_INVALID_REGISTER;
-                    cm_res.dlc = 1;
-            }
-            CAN_put_msg(&cm_res);
-            return 0;
+    cli();
+    do {
+        wdt_enable(WDTO_15MS);
+        for(;;) {
         }
-        else if (cm->type == H9MSG_TYPE_NODE_UPGRADE && cm->dlc == 0) {
-#ifdef BOOTSTART
-            cli();
-            asm volatile ( "jmp " STR(BOOTSTART) );
-#else
-            #warning "Node upgrade (bootloader) disable"
-            h9msg_t cm_res;
-            CAN_init_response_msg(cm, &cm_res);
-            cm_res.type = H9MSG_TYPE_ERROR;
-            cm_res.data[0] = H9MSG_ERROR_BOOTLOADER_UNSUPPORTED;
-            cm_res.dlc = 1;
-            CAN_put_msg(&cm_res);
-            return 0;
-#endif //BOOTSTART
-        }
-        else if (cm->type == H9MSG_TYPE_SET_BIT && cm->dlc == 2) {
-            return 1;
-        }
-        else if (cm->type == H9MSG_TYPE_CLEAR_BIT && cm->dlc == 2) {
-            return 1;
-        }
-        else if (cm->type == H9MSG_TYPE_TOGGLE_BIT && cm->dlc == 2) {
-            return 1;
-        }
-    }
-    else if ((cm->type & H9MSG_NODE_ALL_REMOTE_MSG_GROUP_MASK) == H9MSG_NODE_ALL_REMOTE_MSG_GROUP) {
-        return 2;
-    }
-
-    h9msg_t cm_res;
-    CAN_init_response_msg(cm, &cm_res);
-    cm_res.type = H9MSG_TYPE_ERROR;
-    cm_res.data[0] = H9FRAME_ERROR_INVALID_MSG;
-    cm_res.dlc = 1;
-    CAN_put_msg(&cm_res);
-    return 0;
+    } while(0);
 }
 
-
-void CAN_init(uint16_t node_type, char hardware_rev, uint16_t version_major, uint16_t version_minor, const char *build_info) {
-    node_info.node_type = node_type;
-    node_info.hardware_revision = hardware_rev;
-    node_info.version_major = version_major;
-    node_info.version_minor = version_minor;
-    strncpy(node_info.build_info, build_info, H9MSG_MAX_REGISTER_SIZE);
-
-    read_node_id();
-
-    CANGCON = ( 1 << SWRES );   // Software reset
-    CANTCON = 0x00;             // CAN timing prescaler set to 0;
-
-#if F_CPU == 4000000UL
-    CANBT1 = 0x06;
-    CANBT2 = 0x04;
-    CANBT3 = 0x13;
-#elif F_CPU == 12000000UL
-    CANBT1 = 0x16;
-    CANBT2 = 0x04;
-    CANBT3 = 0x13;
-#elif F_CPU == 16000000UL
-    CANBT1 = 0x1e;
-    CANBT2 = 0x04;
-    CANBT3 = 0x13;
-#else
-#error "Please specify F_CPU"
-#endif
-
-    for ( int8_t mob=0; mob<6; mob++ ) {
-        CANPAGE = ( mob << MOBNB0 ); // Selects Message Object 0-5
-        CANCDMOB = 0x00;             // Disable mob
-        CANSTMOB = 0x00;             // Clear mob status register;
-    }
-
-    //select mob 1 for broadcast with type form 3rd group
-    CANPAGE = 0x01 << MOBNB0;
-    set_CAN_id(0, H9MSG_NODE_STANDARD_MSG_BROADCAST_SUBGROUP, 0, H9MSG_BROADCAST_ID, 0);
-    set_CAN_id_mask(0, H9MSG_NODE_STANDARD_MSG_BROADCAST_SUBGROUP_MASK, 0, (1<<H9MSG_ID_BIT_LENGTH)-1, 0);
-    CANIDM4 |= 1 << IDEMSK; // set filter
-    CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
-
-    //select mob 2 for unicast
-    CANPAGE = 0x02 << MOBNB0;
-    set_CAN_id(0, H9MSG_NODE_STANDARD_MSG_GROUP, 0, can_node_id, 0);
-    set_CAN_id_mask(0, H9MSG_NODE_STANDARD_MSG_GROUP_MASK, 0, (1<<H9MSG_ID_BIT_LENGTH)-1, 0); //H9MSG_TYPE_GROUP_2 | H9MSG_TYPE_GROUP_3
-    CANIDM4 |= 1 << IDEMSK; // set filter
-    CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
-
-
-    CANIE2 = ( 1 << IEMOB0 ) | ( 1 << IEMOB1 ) | ( 1 << IEMOB2 ); //interupt mob 0 1 and 2
-
-    CANGIE = (1<<ENBOFF) | (1<<ENIT) | (1<<ENRX) | (1<<ENTX) | (1<<ENERR) | (1<<ENBX) | (1<<ENERG);
-    CANGCON = 1<<ENASTB;
+static void calc_can_unicast_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, uint8_t type, uint8_t src, uint8_t flags, uint8_t dst, uint8_t seq) {
+    *id1 = (type << 3) | (src >> 5);
+    *id2 = (src << 3) | (flags & 0x03);
+    *id3 = dst;
+    *id4 = ((seq << 3) & 0xf8);
 }
 
+static void calc_can_broadcast_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, uint8_t type, uint8_t src, uint16_t node_type) {
+    *id1 = (type << 3) | (src >> 5);
+    *id2 = (src << 3) | ((node_type >> 13) & 0x03);
+    *id3 = ((node_type >> 5) & 0xff);
+    *id4 = ((node_type << 3) & 0xf8);
+}
 
-void CAN_send_turned_on_broadcast(void) {
-    h9msg_t cm;
-    CAN_init_new_msg(&cm);
+static void calc_can_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, h9frame_t *cm) {
+    if (cm->type & H9FRAME_UNICAST_BROADCAST_BIT)
+        calc_can_broadcast_id(id1, id2, id3, id4, cm->type, cm->source_id, cm->broadcast.group);
+    else
+        calc_can_unicast_id(id1, id2, id3, id4, cm->type, cm->source_id, cm->unicast.flags, cm->unicast.destination_id, cm->unicast.seqnum);
+}
 
-    cm.type = H9MSG_TYPE_NODE_TURNED_ON;
-    cm.destination_id = H9MSG_BROADCAST_ID;
+static void set_CAN_id(h9frame_t *cm) {
+    calc_can_id(&CANIDT1, &CANIDT2, &CANIDT3, &CANIDT4, cm);
+}
+
+static void set_CAN_unicast_id(uint8_t type, uint8_t src, uint8_t flags, uint8_t dst, uint8_t seq) {
+    calc_can_unicast_id(&CANIDT1, &CANIDT2, &CANIDT3, &CANIDT4, type & 0x0f, src, flags, dst, seq);
+}
+
+static void set_CAN_unicast_id_mask(uint8_t type, uint8_t src, uint8_t flags, uint8_t dst, uint8_t seq) {
+    calc_can_unicast_id(&CANIDM1, &CANIDM2, &CANIDM3, &CANIDM4, type | 0x10, src, flags, dst, seq);
+}
+
+static void set_CAN_broadcast_id(uint8_t type, uint8_t src, uint16_t node_type) {
+    calc_can_broadcast_id(&CANIDT1, &CANIDT2, &CANIDT3, &CANIDT4, type | 0x10, src, node_type);
+}
+
+static void set_CAN_broadcast_id_mask(uint8_t type, uint8_t src, uint16_t node_type) {
+    calc_can_broadcast_id(&CANIDM1, &CANIDM2, &CANIDM3, &CANIDM4, type | 0x10, src, node_type);
+}
+
+#ifdef __AVR__
+static void set_mandatory_message_fields(h9frame_t *cm) {
+#else
+void set_mandatory_message_fields(h9frame_t *cm) {
+#endif
+    static uint8_t next_seqnum = 0;
+
+    cm->source_id = can_node_id;
+
+    if (cm->type == H9FRAME_TYPE_SET_REG ||
+        cm->type == H9FRAME_TYPE_GET_REG ||
+        cm->type == H9FRAME_TYPE_SET_BIT ||
+        cm->type == H9FRAME_TYPE_CLEAR_BIT ||
+        cm->type == H9FRAME_TYPE_NODE_UPGRADE ||
+        cm->type == H9FRAME_TYPE_NODE_RESET) {
+
+        cm->unicast.seqnum = next_seqnum;
+        ++next_seqnum;
+    }
+}
+
+static void send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t *value, size_t length) {
+    h9frame_t cm;
+    cm.type = H9FRAME_TYPE_REG_VALUE;
+    cm.unicast.destination_id = destination;
+    cm.unicast.seqnum = seqnum;
+
+    size_t value_ix = 0;
+
+    for (int msg_num = 0; value_ix < length; ++msg_num) {
+        uint8_t i = 1;
+        for (; i < 8 && value_ix < length; ++i) {
+            cm.data[i] = value[value_ix];
+            value_ix++;
+        }
+        cm.dlc = i;
+
+        if (length < 8) {
+            cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+            cm.data[0] = registry;
+        }
+        else if (msg_num == 0) {
+            cm.unicast.flags = H9FRAME_FLAG_MULTI_MSG_FIRST;
+            cm.data[0] = registry;
+        }
+        else if (value_ix < length) {
+            cm.unicast.flags = H9FRAME_FLAG_MULTI_MSG_MIDDLE;
+            cm.data[0] = msg_num;
+        }
+        else {
+            cm.unicast.flags = H9FRAME_FLAG_MULTI_MSG_LAST;
+            cm.data[0] = msg_num;
+        }
+
+        CAN_put_msg(&cm);
+    }
+}
+
+static void send_reg_value1(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value) {
+    h9frame_t cm;
+    cm.type = H9FRAME_TYPE_REG_VALUE;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.destination_id = destination;
+    cm.unicast.seqnum = seqnum;
+
+    cm.data[0] = registry;
+    cm.data[1] = value;
+    cm.dlc = 2;
+    CAN_put_msg(&cm);
+}
+
+static void send_reg_value2(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2) {
+    h9frame_t cm;
+
+    cm.type = H9FRAME_TYPE_REG_VALUE;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.destination_id = destination;
+    cm.unicast.seqnum = seqnum;
+
+    cm.data[0] = registry;
+    cm.data[1] = value1;
+    cm.data[2] = value2;
+    cm.dlc = 3;
+    CAN_put_msg(&cm);
+}
+
+static void send_reg_value3(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3) {
+    h9frame_t cm;
+    cm.type = H9FRAME_TYPE_REG_VALUE;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.destination_id = destination;
+    cm.unicast.seqnum = seqnum;
+
+    cm.data[0] = registry;
+    cm.data[1] = value1;
+    cm.data[2] = value2;
+    cm.data[3] = value3;
+    cm.dlc = 4;
+    CAN_put_msg(&cm);
+}
+
+static void send_reg_value4(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4) {
+    h9frame_t cm;
+    cm.type = H9FRAME_TYPE_REG_VALUE;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.destination_id = destination;
+    cm.unicast.seqnum = seqnum;
+
+    cm.data[0] = registry;
+    cm.data[1] = value1;
+    cm.data[2] = value2;
+    cm.data[3] = value3;
+    cm.data[4] = value4;
+    cm.dlc = 5;
+    CAN_put_msg(&cm);
+}
+
+static void send_reg_value6(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4, uint8_t value5, uint8_t value6) {
+    h9frame_t cm;
+    cm.type = H9FRAME_TYPE_REG_VALUE;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.destination_id = destination;
+    cm.unicast.seqnum = seqnum;
+
+    cm.data[0] = registry;
+    cm.data[1] = value1;
+    cm.data[2] = value2;
+    cm.data[3] = value3;
+    cm.data[4] = value4;
+    cm.data[5] = value5;
+    cm.data[6] = value6;
+    cm.dlc = 7;
+    CAN_put_msg(&cm);
+}
+
+static void CAN_send_node_info_broadcast(uint8_t turn_on) {
+    h9frame_t cm;
+
+    if (turn_on)
+        cm.type = H9FRAME_TYPE_NODE_TURNED_ON;
+    else
+        cm.type = H9FRAME_TYPE_NODE_INFO;
+    cm.source_id = can_node_id;
+    cm.broadcast.group = node_info.node_type;
+
     cm.dlc = 8;
     cm.data[0] = (node_info.node_type >> 8) & 0xff;
     cm.data[1] = (node_info.node_type) & 0xff;
@@ -377,209 +656,89 @@ void CAN_send_turned_on_broadcast(void) {
     CAN_put_msg(&cm);
 }
 
+static void process_standard_reg(h9frame_t *cm) {
+    if (cm->type == H9FRAME_TYPE_SET_REG && cm->dlc > 1) {
+        switch (cm->data[0]) {
+            case NODE_TYPE_STD_REGISTER:
+            case NODE_HARDWARE_REVISION_STD_REGISTER:
+            case NODE_VERSION_STD_REGISTER:
+            case NODE_BUILD_INFO_STD_REGISTER:
+            case NODE_MCU_TYPE_STD_REGISTER:
+            //case NODE_SN_STD_REGISTER:
+            case NODE_RESET_REASON_STD_REGISTER:
+            //case NODE_POWER_SUPPLY_STD_REGISTER,
+            //case NODE_MCU_TEMP_STD_REGISTER,
+                send_command_error(H9FRAME_ERROR_READ_ONLY_REGISTER, cm->source_id, cm->unicast.seqnum);
+                return;
+            case NODE_ID_STD_REGISTER:
+                if (cm->dlc == 2) {
+                    cli();
+                    write_node_id(cm->data[1], node_info.node_type);
+                    sei();
 
-void CAN_set_mob_for_remote_node1(uint16_t remote_node_id, uint8_t all_msg_group) {
-    CANPAGE = 0x03 << MOBNB0; //select mob 3
-    if (all_msg_group) {
-        set_CAN_id(0, H9MSG_NODE_ALL_REMOTE_MSG_GROUP, 0, 0, remote_node_id);
-        set_CAN_id_mask(0, H9MSG_NODE_ALL_REMOTE_MSG_GROUP_MASK, 0, 0, (1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
-    else {
-        set_CAN_id(0, H9MSG_NODE_RESPONSE_MSG_GROUP, 0, 0, remote_node_id);
-        set_CAN_id_mask(0, H9MSG_NODE_RESPONSE_MSG_GROUP_MASK, 0, 0, (1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
-    CANIDM4 |= 1 << IDEMSK; // set filter
-    CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
-
-    CANIE2 |= 1 << IEMOB3;
-}
-
-
-void CAN_set_mob_for_remote_node2(uint16_t remote_node_id, uint8_t all_msg_group) {
-    CANPAGE = 0x04 << MOBNB0; //select mob 4
-    if (all_msg_group) {
-        set_CAN_id(0, H9MSG_NODE_ALL_REMOTE_MSG_GROUP, 0, 0, remote_node_id);
-        set_CAN_id_mask(0, H9MSG_NODE_ALL_REMOTE_MSG_GROUP_MASK, 0, 0, (1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
-    else {
-        set_CAN_id(0, H9MSG_NODE_RESPONSE_MSG_GROUP, 0, 0, remote_node_id);
-        set_CAN_id_mask(0, H9MSG_NODE_RESPONSE_MSG_GROUP_MASK, 0, 0, (1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
-    CANIDM4 |= 1 << IDEMSK; // set filter
-    CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
-    
-    CANIE2 |= 1 << IEMOB4;
-}
-
-
-void CAN_set_mob_for_remote_node3(uint16_t remote_node_id, uint8_t all_msg_group) {
-    CANPAGE = 0x05 << MOBNB0; //select mob 5
-    if (all_msg_group) {
-        set_CAN_id(0, H9MSG_NODE_ALL_REMOTE_MSG_GROUP, 0, 0, remote_node_id);
-        set_CAN_id_mask(0, H9MSG_NODE_ALL_REMOTE_MSG_GROUP_MASK, 0, 0, (1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
-    else {
-        set_CAN_id(0, H9MSG_NODE_RESPONSE_MSG_GROUP, 0, 0, remote_node_id);
-        set_CAN_id_mask(0, H9MSG_NODE_RESPONSE_MSG_GROUP_MASK, 0, 0, (1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
-    CANIDM4 |= 1 << IDEMSK; // set filter
-    CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
-    
-    CANIE2 |= 1 << IEMOB5;
-}
-
-
-uint8_t CAN_try_put_msg(h9msg_t *cm) {
-    CANPAGE = 0 << MOBNB0;              // Select MOb0 for transmission
-
-    if (CANEN2 & ( 1 << ENMOB0 )) {
-        return 0;
-    }
-    
-    CANSTMOB = 0x00;                    // Clear mob status register
-
-    set_CAN_id(cm->priority, cm->type, cm->seqnum, cm->destination_id, cm->source_id);
-
-    for (uint8_t idx = 0; idx < cm->dlc; ++idx)
-        CANMSG = cm->data[idx];
-
-    CANCDMOB = (1 << CONMOB0) | (1 << IDE) | (cm->dlc & 0x0f);
-    return 1;
-}
-
-uint8_t CAN_put_msg(h9msg_t *cm) {
-    cli();
-    uint8_t ret = 0;
-    if (CAN_try_put_msg(cm)) {
-        ret = 1;
-    }
-    else {
-        uint8_t tmp_idx = (uint8_t) ((can_tx_buf_top + 1) & CAN_TX_BUF_INDEX_MASK);
-
-        if (can_tx_buf_bottom != tmp_idx) {
-            can_tx_buf[can_tx_buf_top].canidt1 = calc_can_id1(cm->priority, cm->type, cm->seqnum, cm->destination_id, cm->source_id);
-            can_tx_buf[can_tx_buf_top].canidt2 = calc_can_id2(cm->priority, cm->type, cm->seqnum, cm->destination_id, cm->source_id);
-            can_tx_buf[can_tx_buf_top].canidt3 = calc_can_id3(cm->priority, cm->type, cm->seqnum, cm->destination_id, cm->source_id);
-            can_tx_buf[can_tx_buf_top].canidt4 = calc_can_id4(cm->priority, cm->type, cm->seqnum, cm->destination_id, cm->source_id);
-
-            for (uint8_t idx = 0; idx < cm->dlc; ++idx)
-                can_tx_buf[can_tx_buf_top].data[idx] = cm->data[idx];
-
-            can_tx_buf[can_tx_buf_top].cancdmob = cm->dlc & 0x0f;
-
-            can_tx_buf_top = tmp_idx;
-            ret = 2;
+                    send_reg_value1(NODE_ID_STD_REGISTER, cm->source_id, cm->unicast.seqnum, can_node_id);
+                    return;
+                }
+                else {
+                    send_command_error(H9FRAME_ERROR_REGISTER_SIZE_MISMATCH, cm->source_id, cm->unicast.seqnum);
+                    return;
+                }
+            default:
+                send_command_error(H9FRAME_ERROR_UNSUPPORTED_REGISTER, cm->source_id, cm->unicast.seqnum);
+                return;
         }
     }
-    sei();
-    return ret;
-}
-
-uint8_t CAN_get_msg(h9msg_t *cm) {
-    if (can_rx_buf_top != can_rx_buf_bottom) {
-        cm->priority = (can_rx_buf[can_rx_buf_bottom].canidt1 >> 7) & 0x01;
-        cm->type = ((can_rx_buf[can_rx_buf_bottom].canidt1 >> 2) & 0x1f);
-        cm->seqnum = ((can_rx_buf[can_rx_buf_bottom].canidt1 << 3) & 0x18) | ((can_rx_buf[can_rx_buf_bottom].canidt2 >> 5) & 0x07);
-        cm->destination_id = ((can_rx_buf[can_rx_buf_bottom].canidt2 << 4) & 0x1f0) | ((can_rx_buf[can_rx_buf_bottom].canidt3 >> 4) & 0x0f);
-        cm->source_id = ((can_rx_buf[can_rx_buf_bottom].canidt3 << 5) & 0x1e0) | ((can_rx_buf[can_rx_buf_bottom].canidt4 >> 3) & 0x1f);
-
-        cm->dlc = can_rx_buf[can_rx_buf_bottom].cancdmob & 0x0f;
-        uint8_t idx = 0;
-        for (; idx < 8; ++idx)
-            cm->data[idx] = can_rx_buf[can_rx_buf_bottom].data[idx];
-
-        can_rx_buf_bottom = (uint8_t)((can_rx_buf_bottom + 1) & CAN_RX_BUF_INDEX_MASK);
-
-        // 1st msg filter: mob filter/mask
-        // 2nd msg filter
-        if (cm->source_id == H9MSG_BROADCAST_ID) { //invalid message, drop
-            return 0;
+    else if (cm->type == H9FRAME_TYPE_GET_REG && cm->dlc == 1) {
+        switch (cm->data[0]) {
+            case NODE_TYPE_STD_REGISTER:
+                send_reg_value2(NODE_TYPE_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (node_info.node_type >> 8) & 0xff, (node_info.node_type) & 0xff);
+                return;
+            case NODE_HARDWARE_REVISION_STD_REGISTER:
+                send_reg_value1(NODE_HARDWARE_REVISION_STD_REGISTER, cm->source_id, cm->unicast.seqnum, node_info.hardware_revision);
+                return;
+            case NODE_VERSION_STD_REGISTER:
+                send_reg_value6(NODE_VERSION_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (node_info.version_major >> 8), node_info.version_major & 0xff, (node_info.version_minor >> 8) & 0xff, node_info.version_minor & 0xff, (node_info.version_patch >> 8) & 0xff, node_info.version_patch & 0xff);
+                return;
+            case NODE_BUILD_INFO_STD_REGISTER: {
+                //TODO: add multi-message value with message counter on 7 byte
+                size_t len = 0;
+                for (; node_info.build_info[len] && len < (H9FRAME_MAX_REGISTER_SIZE - 1); len++);
+                send_reg_value(NODE_BUILD_INFO_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (uint8_t*)&node_info.build_info, len+1);
+                return;
+            }
+            case NODE_MCU_TYPE_STD_REGISTER:
+#if defined (__AVR_ATmega16M1__)
+                send_reg_value1(NODE_MCU_TYPE_STD_REGISTER, cm->source_id, cm->unicast.seqnum, NODE_MCU_ATMEGA16M1);
+#elif defined (__AVR_ATmega32M1__)
+                send_reg_value1(NODE_MCU_TYPE_STD_REGISTER, cm->source_id, cm->unicast.seqnum, NODE_MCU_ATMEGA32M1);
+#elif defined (__AVR_ATmega64M1__)
+                send_reg_value1(NODE_MCU_TYPE_STD_REGISTER, cm->source_id, cm->unicast.seqnum, NODE_MCU_ATMEGA64M1);
+#elif defined (__AVR_AT90CAN128__)
+                send_reg_value1(NODE_MCU_TYPE_STD_REGISTER, cm->source_id, cm->unicast.seqnum, NODE_MCU_AT90CAN128);
+#elif defined (__AVR_ATmega32C1__)
+                send_reg_value1(NODE_MCU_TYPE_STD_REGISTER, cm->source_id, cm->unicast.seqnum, NODE_MCU_ATMEGA32C1);
+#else
+#error Unsupported MCU
+#endif
+                return;
+            // case NODE_SN_STD_REGISTER: //CPU serial ID
+            //     send_reg_value4(NODE_SN_STD_REGISTER, cm->source_id, cm->unicast.seqnum, 0, 0, 0, 0);
+            //     return;
+            case NODE_RESET_REASON_STD_REGISTER:
+                send_reg_value1(NODE_RESET_REASON_STD_REGISTER, cm->source_id, cm->unicast.seqnum, reset_reason);
+                return;
+            //case NODE_POWER_SUPPLY_STD_REGISTER,
+            //     return;
+            //case NODE_MCU_TEMP_STD_REGISTER,
+            //     return;
+            case NODE_ID_STD_REGISTER:
+                send_reg_value1(NODE_ID_STD_REGISTER, cm->source_id, cm->unicast.seqnum, can_node_id);
+                return;
+            default:
+                send_command_error(H9FRAME_ERROR_UNSUPPORTED_REGISTER, cm->source_id, cm->unicast.seqnum);
+                return;
         }
-
-        return process_msg(cm);
     }
-    return 0;
-}
-
-
-void CAN_init_new_msg(h9msg_t *mes) {
-    static uint8_t next_seqnum = 0;
-    mes->priority = H9MSG_PRIORITY_LOW;
-    mes->seqnum = next_seqnum;
-    mes->source_id = can_node_id;
-    mes->dlc = 0;
-    ++next_seqnum;
-}
-
-
-void CAN_init_response_msg(const h9msg_t *req, h9msg_t *res) {
-    res->priority = req->priority;
-    res->seqnum = req->seqnum;
-    switch (req->type) {
-        case H9MSG_TYPE_GET_REG:
-            res->type = H9MSG_TYPE_REG_VALUE;
-            break;
-        case H9MSG_TYPE_SET_REG:
-        case H9MSG_TYPE_SET_BIT:
-        case H9MSG_TYPE_CLEAR_BIT:
-        case H9MSG_TYPE_TOGGLE_BIT:
-            res->type = H9MSG_TYPE_REG_EXTERNALLY_CHANGED;
-            break;
-        case H9MSG_TYPE_DISCOVER:
-            res->type = H9MSG_TYPE_NODE_INFO;
-            break;
-    }
-    res->source_id = can_node_id;
-    res->destination_id = req->source_id;
-    res->dlc = 0;
-}
-
-
-void read_node_id(void) {
-    uint16_t node_id = eeprom_read_word(&ee_node_id);
-    if (node_id > 0 && node_id < H9MSG_BROADCAST_ID) {
-        can_node_id = node_id & ((1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
-    else {
-        can_node_id = 0;
-    }
-}
-
-
-void write_node_id(uint16_t id) {
-    cli();
-    eeprom_write_word(&ee_node_id, id);
-    sei();
-}
-
-static uint8_t calc_can_id1(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id) {
-    return ((priority << 7) & 0x80) | ((type << 2) & 0x7c) | ((seqnum >> 3) & 0x03);
-}
-
-static uint8_t calc_can_id2(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id) {
-    return ((seqnum << 5) & 0xe0) | ((destination_id >> 4) & 0x1f);
-}
-
-static uint8_t calc_can_id3(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id) {
-    return ((destination_id << 4) & 0xf0) | ((source_id >> 5) & 0x0f);
-}
-
-static uint8_t calc_can_id4(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id) {
-    return ((source_id << 3) & 0xf8);
-}
-
-
-void set_CAN_id(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id) {
-    CANIDT1 = calc_can_id1(priority, type, seqnum, destination_id, source_id);
-    CANIDT2 = calc_can_id2(priority, type, seqnum, destination_id, source_id);
-    CANIDT3 = calc_can_id3(priority, type, seqnum, destination_id, source_id);
-    CANIDT4 = calc_can_id4(priority, type, seqnum, destination_id, source_id);
-}
-
-
-void set_CAN_id_mask(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id) {
-    CANIDM1 = calc_can_id1(priority, type, seqnum, destination_id, source_id);
-    CANIDM2 = calc_can_id2(priority, type, seqnum, destination_id, source_id);
-    CANIDM3 = calc_can_id3(priority, type, seqnum, destination_id, source_id);
-    CANIDM4 = calc_can_id4(priority, type, seqnum, destination_id, source_id);
+    //H9FRAME_TYPE_SET_BIT, H9FRAME_TYPE_CLEAR_BIT
+    send_command_error(H9FRAME_ERROR_UNSUPPORTED_OPERATION, cm->source_id, cm->unicast.seqnum);
 }

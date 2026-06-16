@@ -5,9 +5,12 @@
 *.pid
 *.out
 
+Testing
+
 # CMake
 .cmake/
 cmake-build-debug*
+build-bootloader/
 CMakeFiles
 build/
 CMakeCache.txt

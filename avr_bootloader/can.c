@@ -7,18 +7,18 @@
  */
 
 #include "can.h"
+#include <h9avr/node_id.h>
 
+uint8_t can_node_id;
+uint16_t can_node_type;
 
-volatile uint16_t can_node_id;
-uint16_t ee_node_id EEMEM = 0;
-
-static void read_node_id(void);
-static void set_CAN_id(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id);
-static void set_CAN_id_mask(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id);
-
+static void set_CAN_unicast_id(uint8_t type, uint8_t src, uint8_t flags, uint8_t dst, uint8_t seq);
+static void set_CAN_unicast_id_mask(uint8_t type, uint8_t src, uint8_t flags, uint8_t dst, uint8_t seq);
+static void calc_can_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, h9frame_t *cm);
+static void set_CAN_id(h9frame_t *cm);
 
 void CAN_init(void) {
-    read_node_id();
+    can_node_id = read_node_id(&can_node_type);
 
     CANGCON = ( 1 << SWRES );   // Software reset
     CANTCON = 0x00;             // CAN timing prescaler set to 0;
@@ -45,10 +45,11 @@ void CAN_init(void) {
         CANSTMOB = 0x00;             // Clear mob status register;
     }
 
+
     // 1st msg filter
     CANPAGE = 0x01 << MOBNB0;
-    set_CAN_id(0, H9MSG_BOOTLOADER_MSG_GROUP, 0, can_node_id, 0);
-    set_CAN_id_mask(0, H9MSG_BOOTLOADER_MSG_GROUP_MASK, 0, (1<<H9MSG_ID_BIT_LENGTH)-1, 0);
+    set_CAN_unicast_id(H9FRAME_BOOTLOADER_MSG_TYPE_GROUP, 0, 0, can_node_id, 0);
+    set_CAN_unicast_id_mask(H9FRAME_BOOTLOADER_MSG_TYPE_GROUP_MASK, 0, 0, H9FRAME_ID_MASK, 0);
     CANIDM4 |= 1 << IDEMSK;
     CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
 
@@ -56,12 +57,12 @@ void CAN_init(void) {
 }
 
 
-void CAN_put_msg_blocking(h9msg_t *cm) {
+void CAN_put_msg_blocking(h9frame_t *cm) {
     CANPAGE = 0 << MOBNB0;              // Select MOb0 for transmission
     while ( CANEN2 & ( 1 << ENMOB0 ) ); // Wait for MOb 0 to be free
     CANSTMOB = 0x00;                    // Clear mob status register
 
-    set_CAN_id(cm->priority, cm->type, cm->seqnum, cm->destination_id, cm->source_id);
+    set_CAN_id(cm);
 
     uint8_t idx = 0;
     for (; idx < 8; ++idx)
@@ -71,7 +72,7 @@ void CAN_put_msg_blocking(h9msg_t *cm) {
 }
 
 
-uint8_t CAN_get_msg_blocking(h9msg_t *cm) {
+uint8_t CAN_get_msg_blocking(h9frame_t *cm) {
     uint32_t timeout_counter = 0x1fffff;
 
     while (timeout_counter) {
@@ -88,11 +89,11 @@ uint8_t CAN_get_msg_blocking(h9msg_t *cm) {
                 cm->data[i] = CANMSG;
             }
 
-            cm->priority = (canidt1 >> 7) & 0x01;
-            cm->type = (canidt1 >> 2) & 0x1f;
-            cm->seqnum = ((canidt1 << 3) & 0x18) | ((canidt2 >> 5) & 0x07);
-            cm->destination_id = ((canidt2 << 4) & 0x1f0) | ((canidt3 >> 4) & 0x0f);
-            cm->source_id = ((canidt3 << 5) & 0x1e0) | ((canidt4 >> 3) & 0x1f);
+            cm->type = canidt1 >> 3;
+            cm->source_id = (canidt1 << 5) | (canidt2 >> 3);
+            cm->unicast.flags = ((canidt2) & 0x03);
+            cm->unicast.destination_id  = canidt3;
+            cm->unicast.seqnum = canidt4 >> 3;
 
             cm->dlc = cancdmob & 0x0f;
 
@@ -105,29 +106,35 @@ uint8_t CAN_get_msg_blocking(h9msg_t *cm) {
     return 0;
 }
 
-
-void read_node_id(void) {
-    uint16_t node_id = eeprom_read_word(&ee_node_id);
-    if (node_id > 0 && node_id < H9MSG_BROADCAST_ID) {
-        can_node_id = node_id & ((1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
-    else {
-        can_node_id = 0;
-    }
+static void calc_can_unicast_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, uint8_t type, uint8_t src, uint8_t flags, uint8_t dst, uint8_t seq) {
+    *id1 = (type << 3) | (src >> 5);
+    *id2 = (src << 3) | (flags & 0x03);
+    *id3 = dst;
+    *id4 = ((seq << 3) & 0xf8);
 }
 
-
-void set_CAN_id(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id) {
-    CANIDT1 = ((priority << 7) & 0x80) | ((type << 2) & 0x7c) | ((seqnum >> 3) & 0x03);
-    CANIDT2 = ((seqnum << 5) & 0xe0) | ((destination_id >> 4) & 0x1f);
-    CANIDT3 = ((destination_id << 4) & 0xf0) | ((source_id >> 5) & 0x0f);
-    CANIDT4 = ((source_id << 3) & 0xf8);
+static void calc_can_broadcast_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, uint8_t type, uint8_t src, uint16_t node_type) {
+    *id1 = (type << 3) | (src >> 5);
+    *id2 = (src << 3) | ((node_type >> 13) & 0x03);
+    *id3 = ((node_type >> 5) & 0xff);
+    *id4 = ((node_type << 3) & 0xf8);
 }
 
+static void calc_can_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, h9frame_t *cm) {
+    if (cm->type & H9FRAME_UNICAST_BROADCAST_BIT)
+        calc_can_broadcast_id(id1, id2, id3, id4, cm->type, cm->source_id, cm->broadcast.group);
+    else
+        calc_can_unicast_id(id1, id2, id3, id4, cm->type, cm->source_id, cm->unicast.flags, cm->unicast.destination_id, cm->unicast.seqnum);
+}
 
-void set_CAN_id_mask(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id) {
-    CANIDM1 = ((priority << 7) & 0x80) | ((type << 2) & 0x7c) | ((seqnum >> 3) & 0x03);
-    CANIDM2 = ((seqnum << 5) & 0xe0) | ((destination_id >> 4) & 0x1f);
-    CANIDM3 = ((destination_id << 4) & 0xf0) | ((source_id >> 5) & 0x0f);
-    CANIDM4 = ((source_id << 3) & 0xf8);
+static void set_CAN_id(h9frame_t *cm) {
+    calc_can_id(&CANIDT1, &CANIDT2, &CANIDT3, &CANIDT4, cm);
+}
+
+static void set_CAN_unicast_id(uint8_t type, uint8_t src, uint8_t flags, uint8_t dst, uint8_t seq) {
+    calc_can_unicast_id(&CANIDT1, &CANIDT2, &CANIDT3, &CANIDT4, type & 0x0f, src, flags, dst, seq);
+}
+
+static void set_CAN_unicast_id_mask(uint8_t type, uint8_t src, uint8_t flags, uint8_t dst, uint8_t seq) {
+    calc_can_unicast_id(&CANIDM1, &CANIDM2, &CANIDM3, &CANIDM4, type | 0x10, src, flags, dst, seq);
 }
