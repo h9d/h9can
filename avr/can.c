@@ -537,19 +537,19 @@ static void send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum
         cm.dlc = i;
 
         if (length < 8) {
-            cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+            cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
             cm.data[0] = registry;
         }
         else if (msg_num == 0) {
-            cm.unicast.flags = H9FRAME_FLAG_MULTI_MSG_FIRST;
+            cm.unicast.flags = H9FRAME_FLAG_MULTI_FRAME_FIRST;
             cm.data[0] = registry;
         }
         else if (value_ix < length) {
-            cm.unicast.flags = H9FRAME_FLAG_MULTI_MSG_MIDDLE;
+            cm.unicast.flags = H9FRAME_FLAG_MULTI_FRAME_MIDDLE;
             cm.data[0] = msg_num;
         }
         else {
-            cm.unicast.flags = H9FRAME_FLAG_MULTI_MSG_LAST;
+            cm.unicast.flags = H9FRAME_FLAG_MULTI_FRAME_LAST;
             cm.data[0] = msg_num;
         }
 
@@ -560,7 +560,7 @@ static void send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum
 static void send_reg_value1(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
     cm.unicast.destination_id = destination;
     cm.unicast.seqnum = seqnum;
 
@@ -574,7 +574,7 @@ static void send_reg_value2(uint8_t registry, uint8_t destination, uint8_t seqnu
     h9frame_t cm;
 
     cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
     cm.unicast.destination_id = destination;
     cm.unicast.seqnum = seqnum;
 
@@ -588,7 +588,7 @@ static void send_reg_value2(uint8_t registry, uint8_t destination, uint8_t seqnu
 static void send_reg_value3(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
     cm.unicast.destination_id = destination;
     cm.unicast.seqnum = seqnum;
 
@@ -603,7 +603,7 @@ static void send_reg_value3(uint8_t registry, uint8_t destination, uint8_t seqnu
 static void send_reg_value4(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
     cm.unicast.destination_id = destination;
     cm.unicast.seqnum = seqnum;
 
@@ -619,7 +619,7 @@ static void send_reg_value4(uint8_t registry, uint8_t destination, uint8_t seqnu
 static void send_reg_value6(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4, uint8_t value5, uint8_t value6) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
     cm.unicast.destination_id = destination;
     cm.unicast.seqnum = seqnum;
 

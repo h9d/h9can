@@ -30,7 +30,7 @@ void write_page(uint16_t page, uint16_t dst_id) {
         h9frame_t cm_res;
 
         cm_res.source_id = can_node_id;
-        cm_res.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+        cm_res.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
         cm_res.unicast.destination_id = dst_id;
         cm_res.unicast.seqnum = cm.unicast.seqnum;
 
@@ -153,7 +153,7 @@ int main(void) {
                 h9frame_t cm_res;
                 cm_res.type = H9FRAME_TYPE_PAGE_FILL_NEXT;
                 cm_res.source_id = can_node_id;
-                cm_res.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+                cm_res.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
                 cm_res.unicast.destination_id = cm.source_id;
                 cm_res.unicast.seqnum = seqnum++;
                 cm_res.dlc = 2;
