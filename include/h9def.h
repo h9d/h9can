@@ -112,7 +112,7 @@ enum {
 };
 
 enum {
-    H9FRAME_BROADCAST_ID = 0xffff,
+    H9FRAME_BROADCAST_ALL_GROUP = 0xffff,
 };
 
 enum {

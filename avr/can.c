@@ -141,7 +141,7 @@ void CAN_init(uint16_t node_type, char hardware_rev, uint16_t version_major, uin
 
     //select mob 2 for broadcast
     CANPAGE = 0x02 << MOBNB0;
-    set_CAN_broadcast_id(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, 0);
+    set_CAN_broadcast_id(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, H9FRAME_BROADCAST_ID);
     set_CAN_broadcast_id_mask(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, H9FRAME_NODE_TYPE_MASK);
     CANIDM4 |= 1 << IDEMSK; // set filter
     CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only

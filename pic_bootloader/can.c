@@ -135,11 +135,11 @@ uint8_t CAN_get_msg_blocking(h9msg_t*cm) {
     
     while (timeout_counter) {
         if (RXB0CONbits.RXFUL) {
-            cm->priority = (RXB0SIDH >> 7) & 0x01;
-            cm->type = (RXB0SIDH >> 2) & 0x1f;
-            cm->seqnum = ((RXB0SIDH << 3) & 0x18) | ((RXB0SIDL >> 5) & 0x07);
-            cm->destination_id = ((RXB0SIDL  & 0x03) << 7) | ((RXB0EIDH >> 1) & 0x7f);
-            cm->source_id = ((RXB0EIDH & 0x1) << 8) | RXB0EIDL;
+            cm->priority = (RXB0SIDH >> 7) & 0x01U;
+            cm->type = (RXB0SIDH >> 2) & 0x1fU;
+            cm->seqnum = ((RXB0SIDH << 3) & 0x18) | ((RXB0SIDL >> 5) & 0x07U);
+            cm->destination_id = ((RXB0SIDL  & 0x03U) << 7) | ((RXB0EIDH >> 1U) & 0x7fU);
+            cm->source_id = ((RXB0EIDH & 0x1U) << 8) | RXB0EIDL;
 
             cm->dlc = RXB0DLC & 0x0f;
 

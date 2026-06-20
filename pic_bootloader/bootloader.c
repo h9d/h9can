@@ -111,7 +111,7 @@ void main(void) {
     while (1) {
         if (CAN_get_msg_blocking(&cm)) {
             if (cm.type == H9MSG_TYPE_PAGE_START && cm.dlc == 2) {
-                uint16_t block = cm.data[0] << 8 | cm.data[1];
+                uint16_t block = (uint16_t)(cm.data[0] << 8) | cm.data[1];
 
                 h9msg_t cm_res;
 
