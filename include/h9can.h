@@ -20,9 +20,6 @@
 #include "h9frame.h"
 #include "h9def.h"
 
-/** Current node ID, loaded from EEPROM by CAN_init(). */
-extern volatile uint8_t can_node_id;
-
 /**
  * @brief Initialise the CAN peripheral and load the node ID from EEPROM.
  *

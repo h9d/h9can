@@ -4,7 +4,7 @@
 #define SECTOR_ADDRES(base, offset, size) (base + (((offset * 3) & 0x0f) * (ROUND_UP_4(size) + 4)))
 #define COUNTER_VALID_WINDOW  (128u - SECTOR_NUMBER)   /* 112 */
 
-void eeprom_write_byte(uint16_t addr, uint8_t data) {
+static void eeprom_write_byte(uint16_t addr, uint8_t data) {
     uint8_t GIEBitValue = INTCONbits.GIE;
     EEADRH = ((addr >> 8) & 0x03);
     EEADR = (addr & 0xFF);
@@ -22,7 +22,7 @@ void eeprom_write_byte(uint16_t addr, uint8_t data) {
     INTCONbits.GIE = GIEBitValue;   // restore interrupt enable
 }
 
-uint8_t eeprom_read_byte(uint16_t addr) {
+static uint8_t eeprom_read_byte(uint16_t addr) {
     EEADRH = ((addr >> 8) & 0x03);
     EEADR = (addr & 0xFF);
     EECON1bits.CFGS = 0;
@@ -98,128 +98,6 @@ static uint8_t cyclic_counter_great(uint8_t a, uint8_t b) {
     /* diff w [113, 143]: strefa martwa - nie rozstrzygamy */
     return 0;
 }
-//
-//static uint8_t write_node_and_verify(uint8_t idx, uint8_t id, uint8_t counter) {
-//    node_can_setting_t new_setting;
-//    new_setting.magicbyte = MAGIC_BYTE;
-//    new_setting.counter = counter;
-//    new_setting.node_id = id;
-//    new_setting.crc = crc_sum(&new_setting);
-//    write_sector((idx * 3) & 0x0f, &new_setting);
-//
-//    node_can_setting_t test;
-//    read_sector((idx * 3) & 0x0f, &test);
-//    if (test.magicbyte == MAGIC_BYTE && test.counter == new_setting.counter &&  test.crc == new_setting.crc && test.node_id == new_setting.node_id) {
-//        return 1;
-//    }
-//    return 0;
-//}
-//
-//static void refresh_bad_call(uint8_t id, uint8_t last_counter) {
-//    node_can_setting_t tmp;
-//
-//    for (uint8_t i = 0; i < SECTOR_NUMBER; ++i) {
-//        read_sector((i * 3) & 0x0f, &tmp);
-//        if (tmp.magicbyte != MAGIC_BYTE || tmp.crc != crc_sum(&tmp)) {
-//            if (write_node_and_verify(i, id, last_counter + 1))
-//                break;
-//        }
-//    }
-//}
-//
-//uint8_t read_node_id(void) {
-//    node_can_setting_t max;
-//    int i = 0;
-//    for (; i < SECTOR_NUMBER; ++i) {
-//        read_sector((i * 3) & 0x0f, &max);
-//        if (max.magicbyte == MAGIC_BYTE && max.crc == crc_sum(&max)) {
-//            break;
-//        }
-//    }
-//
-//    if (i < SECTOR_NUMBER) {
-//        i++;
-//        for (; i < SECTOR_NUMBER; ++i) {
-//            node_can_setting_t buf;
-//            read_sector((i * 3) & 0x0f, &buf);
-//            if (buf.magicbyte == MAGIC_BYTE && buf.crc == crc_sum(&buf) && cyclic_counter_great(buf.counter, max.counter)) {
-//                 max = buf;
-//            }
-//        }
-//        return max.node_id;
-//    }
-//
-//    return 0xff; //pamiec pusta
-//}
-//
-//uint8_t read_node_id_and_refresh(void){
-//    node_can_setting_t max;
-//    int i = 0;
-//    int error_cell_count = 0;
-//    for (; i < SECTOR_NUMBER; ++i) {
-//        read_sector((i * 3) & 0x0f, &max);
-//        if (max.magicbyte == MAGIC_BYTE && max.crc == crc_sum(&max)) {
-//            break;
-//        }
-//        error_cell_count++;
-//    }
-//
-//    if (i < SECTOR_NUMBER) {
-//        i++;
-//        for (; i < SECTOR_NUMBER; ++i) {
-//            node_can_setting_t buf;
-//            read_sector((i * 3) & 0x0f, &buf);
-//            if (buf.magicbyte == MAGIC_BYTE && buf.crc == crc_sum(&buf)) {
-//                if (cyclic_counter_great(buf.counter, max.counter))
-//                    max = buf;
-//            }
-//            else {
-//                error_cell_count++;
-//            }
-//        }
-//        if (error_cell_count) {
-//            refresh_bad_call(max.node_id, max.counter);
-//        }
-//        return max.node_id;
-//    }
-//
-//    return 0xff; //pamiec pusta
-//}
-//
-//void write_node_id(uint8_t id) {
-//    node_can_setting_t max;
-//    int max_idx = -1;
-//    int i = 0;
-//    for (; i < SECTOR_NUMBER; ++i) {
-//        read_sector((i * 3) & 0x0f, &max);
-//        if (max.magicbyte == MAGIC_BYTE && max.crc == crc_sum(&max)) {
-//            max_idx = i;
-//            break;
-//        }
-//    }
-//    if (i < SECTOR_NUMBER) {
-//        i++;
-//        for (; i < SECTOR_NUMBER; ++i) {
-//            node_can_setting_t buf;
-//            read_sector((i * 3) & 0x0f, &buf);
-//            if (buf.magicbyte == MAGIC_BYTE && cyclic_counter_great(buf.counter, max.counter) && buf.crc == crc_sum(&buf)) {
-//                max_idx = i;
-//                max = buf;
-//            }
-//        }
-//    }
-//    int j = 0;
-//    for (; j < SECTOR_NUMBER; ++j) {
-//        if (write_node_and_verify((uint8_t)(max_idx + 1 + j), id, (max_idx > -1) ? max.counter + 1 : 0))
-//            break;
-//    }
-//
-//    j++;
-//    for (; j < SECTOR_NUMBER; ++j) {
-//        if (write_node_and_verify((uint8_t)(max_idx + 1 + j), id, (max_idx > -1) ? max.counter + 2 : 1))
-//            break;
-//    }
-//}
 
 //CRC-16/CCITT
 static uint16_t crc16_update(uint16_t crc, uint8_t byte) {
@@ -286,7 +164,7 @@ static uint8_t write_sector_and_verify(uint16_t addr, uint8_t counter, uint8_t *
     return 1;
 }
 
-static void refresh_bad_sector(uint16_t addr_base, uint8_t counter, uint8_t *data, uint8_t size) {
+static inline void refresh_bad_sector(uint16_t addr_base, uint8_t counter, uint8_t *data, uint8_t size) {
     uint8_t tmp_counter;
 
     for (uint8_t i = 0; i < SECTOR_NUMBER; ++i) {
@@ -295,6 +173,38 @@ static void refresh_bad_sector(uint16_t addr_base, uint8_t counter, uint8_t *dat
                 break;
         }
     }
+}
+
+static uint8_t read_data(uint16_t addr_base, uint8_t *data, uint8_t size) {
+    uint8_t max_counter;
+    uint8_t max_idx;
+    
+    uint8_t i = 0;
+    for (; i < SECTOR_NUMBER; ++i) {
+        if (read_sector(SECTOR_ADDRES(addr_base, i, size), &max_counter, NULL, size)) {
+            max_idx = i;
+            break;
+        }
+    }
+
+    if (i < SECTOR_NUMBER) {
+        i++;
+        for (; i < SECTOR_NUMBER; ++i) {
+            uint8_t tmp_counter;
+            if (read_sector(SECTOR_ADDRES(addr_base, i, size), &tmp_counter, NULL, size)) {
+                if (cyclic_counter_great(tmp_counter, max_counter)) {
+                    max_counter = tmp_counter;
+                    max_idx = i;
+                }
+            }
+        }
+        
+        if (read_sector(SECTOR_ADDRES(addr_base, max_idx, size), &max_counter, data, size)) { 
+            return 1;
+        }
+    }
+
+    return 0; //pamiec pusta
 }
 
 uint8_t read_data_and_refresh(uint16_t addr_base, uint8_t *data, uint8_t size) {
@@ -371,6 +281,13 @@ void write_data(uint16_t addr_base, uint8_t *data, uint8_t size) {
         if (write_sector_and_verify(SECTOR_ADDRES(addr_base, max_idx + 1 + j, size), (max_idx > -1) ? max_counter + 2 : 1, data,  size))
             break;
     }
+}
+
+uint8_t read_node_id(void) {
+    uint8_t id;
+    if (read_data(0, &id, sizeof(uint8_t)))
+        return id;
+    return 0xff;
 }
 
 uint8_t read_node_id_and_refresh(void){

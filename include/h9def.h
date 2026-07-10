@@ -113,6 +113,7 @@ enum {
 };
 
 enum {
+    H9FRAME_BROADCAST_BOOTLOADER_GROUP = 0xfffe, //node type
     H9FRAME_BROADCAST_ALL_GROUP = 0xffff,
 };
 

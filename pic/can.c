@@ -12,6 +12,8 @@
 #include "h9frame.h"
 #include "h9def.h"
 
+#include "h9pic/common.h"
+
 #define CAN_RX_BUF_SIZE 16
 #define CAN_RX_BUF_INDEX_MASK 0x0F
 
@@ -155,7 +157,7 @@ void CAN_init(uint16_t node_type, uint8_t default_id, uint16_t version_major, ui
 
     //mask for RXF1 - RXF5
     calc_can_broadcast_id(&RXM1SIDH, &RXM1SIDL, &RXM1EIDH, &RXM1EIDL, H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, H9FRAME_NODE_TYPE_MASK);
-    calc_can_broadcast_id(&RXF1SIDH, &RXF1SIDL, &RXF1EIDH, &RXF1EIDL, H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, H9FRAME_BROADCAST_ID);
+    calc_can_broadcast_id(&RXF1SIDH, &RXF1SIDL, &RXF1EIDH, &RXF1EIDL, H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, H9FRAME_BROADCAST_ALL_GROUP);
     calc_can_broadcast_id(&RXF2SIDH, &RXF2SIDL, &RXF2EIDH, &RXF2EIDL, H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, node_type);
 
     /**
@@ -355,26 +357,6 @@ void CAN_init_response_msg(const h9frame_t *req, h9frame_t *res) {
     res->source_id = node_info.node_id;
     res->unicast.destination_id = req->source_id;
     res->dlc = 0;
-}
-
-//          | SIDH                        | SIDL                    | EIDH                    | EIDL
-// 31 30 29 | 28     27 26 25 24 23 22 21 | 20 19 18 ** ** ** 17 16 | 15 14 13 12 11 10 09 08 | 07 06 05 04 03 02 01 00
-// -- -- -- | ty_(0) ty ty ty ty so so so | so so so **  1 ** so so | fl fl fl ds ds ds ds ds | ds ds ds sq sq sq sq sq
-static void calc_can_unicast_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, uint8_t type, uint8_t src, uint8_t flags, uint8_t dst, uint8_t seq) {
-    *id1 = (uint8_t)(type << 3) | (uint8_t)(src >> 5);
-    *id2 = (uint8_t)((src << 3) & 0xe0) | 0x08 | (src & 0x03);
-    *id3 = (uint8_t)(flags << 5) | (uint8_t)(dst >> 3);
-    *id4 = (uint8_t)(dst << 5) | (seq & 0x1f);
-}
-
-//          | SIDH                        | SIDL                    | EIDH                    | EIDL
-// 31 30 29 | 28     27 26 25 24 23 22 21 | 20 19 18 ** ** ** 17 16 | 15 14 13 12 11 10 09 08 | 07 06 05 04 03 02 01 00
-// -- -- -- | ty_(1) ty ty ty ty so so so | so so so **  1 ** so so | nt nt nt nt nt nt nt nt | nt nt nt nt nt nt nt nt
-static void calc_can_broadcast_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, uint8_t type, uint8_t src, uint16_t node_type) {
-    *id1 = (uint8_t)(type << 3) | (uint8_t)(src >> 5);
-    *id2 = (uint8_t)((src << 3) & 0xe0) | 0x08 | (src & 0x03);
-    *id3 = node_type >> 8;
-    *id4 = node_type & 0xff;
 }
 
 void CAN_send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t *value, size_t length) {
@@ -626,7 +608,7 @@ static uint8_t process_msg(h9frame_t *cm) {
     /* --- BROADCAST --- */
     if (cm->type & H9FRAME_UNICAST_BROADCAST_BIT) {
         if (cm->type == H9FRAME_TYPE_DISCOVER || cm->type == H9FRAME_TYPE_GROUP_RESET) {
-            if (cm->broadcast.group == node_info.node_type || cm->broadcast.group == H9FRAME_BROADCAST_ID) {
+            if (cm->broadcast.group == node_info.node_type || cm->broadcast.group == H9FRAME_BROADCAST_ALL_GROUP) {
                 if (cm->type == H9FRAME_TYPE_DISCOVER) {
                     CAN_send_node_info_broadcast(0);
                     return 0;
