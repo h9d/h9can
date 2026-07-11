@@ -11,10 +11,9 @@
 #include <xc.h>
 #include "can.h"
 
-#define FLASH_BLOCK_SIZE 64
-#define BOOTLOADER_VERSION_MAJOR 1
-#define BOOTLOADER_VERSION_MINOR 0
+#include "version.h"
 
+#define FLASH_BLOCK_SIZE 64
 
 static uint8_t seqnum = 0;
 
@@ -95,12 +94,12 @@ void main(void) {
 
     turn_on_msg.type = H9FRAME_TYPE_BOOTLOADER_TURNED_ON;
     turn_on_msg.dlc = 8;
-    turn_on_msg.data[0] = 0;
-    turn_on_msg.data[1] = 0;
-    turn_on_msg.data[2] = (BOOTLOADER_VERSION_MAJOR >> 8);
-    turn_on_msg.data[3] = BOOTLOADER_VERSION_MAJOR & 0xff;
-    turn_on_msg.data[4] = (BOOTLOADER_VERSION_MINOR >> 8) & 0xff;
-    turn_on_msg.data[5] = BOOTLOADER_VERSION_MINOR & 0xff;
+    turn_on_msg.data[0] = (VERSION_MAJOR >> 8);
+    turn_on_msg.data[1] = (VERSION_MAJOR >> 8);
+    turn_on_msg.data[2] = (VERSION_MINOR >> 8);
+    turn_on_msg.data[3] = VERSION_MINOR & 0xff;
+    turn_on_msg.data[4] = (VERSION_PATCH >> 8) & 0xff;
+    turn_on_msg.data[5] = VERSION_PATCH & 0xff;
     turn_on_msg.data[6] = NODE_MCU_PIC18F46K80;
 #if _XTAL_FREQ == 16000000
     turn_on_msg.data[7] = NODE_MCU_F_16MHz;

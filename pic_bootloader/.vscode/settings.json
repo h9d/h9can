@@ -9,5 +9,6 @@
         "embedded-debug",
         "gdb",
         "mplab-core-da"
-    ]
+    ],
+    "cmake.sourceDirectory": "/Users/crowx/projekty/h9/h9can/pic_bootloader/cmake/h9pic-bootloader/default"
 }
