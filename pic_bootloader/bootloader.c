@@ -95,7 +95,7 @@ void main(void) {
     turn_on_msg.type = H9FRAME_TYPE_BOOTLOADER_TURNED_ON;
     turn_on_msg.dlc = 8;
     turn_on_msg.data[0] = (VERSION_MAJOR >> 8);
-    turn_on_msg.data[1] = (VERSION_MAJOR >> 8);
+    turn_on_msg.data[1] = VERSION_MAJOR & 0xff;
     turn_on_msg.data[2] = (VERSION_MINOR >> 8);
     turn_on_msg.data[3] = VERSION_MINOR & 0xff;
     turn_on_msg.data[4] = (VERSION_PATCH >> 8) & 0xff;
@@ -117,7 +117,7 @@ void main(void) {
 
                 h9frame_t cm_res;
 
-                cm_res.type = H9FRAME_TYPE_PAGE_FILL;
+                cm_res.type = H9FRAME_TYPE_PAGE_FILL_NEXT;
                 cm_res.unicast.seqnum = seqnum++;
                 cm_res.unicast.destination_id = cm.source_id;
                 cm_res.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
