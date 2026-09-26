@@ -27,6 +27,14 @@ add_library(h9pic_bootloader_default_default_XC8_compile OBJECT ${h9pic_bootload
 
 endif()
 
+# Handle files with suffix elf, for group default-XC8
+if(h9pic_bootloader_default_default_XC8_FILE_TYPE_objcopy_lss)
+add_library(h9pic_bootloader_default_default_XC8_objcopy_lss OBJECT ${h9pic_bootloader_default_default_XC8_FILE_TYPE_objcopy_lss})
+    h9pic_bootloader_default_default_XC8_objcopy_lss_rule(h9pic_bootloader_default_default_XC8_objcopy_lss)
+    list(APPEND h9pic_bootloader_default_library_list "$<TARGET_OBJECTS:h9pic_bootloader_default_default_XC8_objcopy_lss>")
+
+endif()
+
 
 # Main target for this project
 add_executable(h9pic_bootloader_default_image_pqJsbh6X ${h9pic_bootloader_default_library_list})
@@ -37,8 +45,10 @@ set_target_properties(h9pic_bootloader_default_image_pqJsbh6X PROPERTIES
     ADDITIONAL_CLEAN_FILES "${output_extensions}"
     RUNTIME_OUTPUT_DIRECTORY "${h9pic_bootloader_default_output_dir}")
 target_link_libraries(h9pic_bootloader_default_image_pqJsbh6X PRIVATE ${h9pic_bootloader_default_default_XC8_FILE_TYPE_link})
-
 # Add the link options from the rule file.
 h9pic_bootloader_default_link_rule( h9pic_bootloader_default_image_pqJsbh6X)
 
+
+#Add objcopy steps
+h9pic_bootloader_default_objcopy_lss_rule(h9pic_bootloader_default_image_pqJsbh6X)
 

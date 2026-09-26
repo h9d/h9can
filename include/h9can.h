@@ -33,10 +33,16 @@
  * @param version_minor   Firmware version minor number.
  * @param version_patch   Firmware version patch number.
  * @param build_info      Null-terminated build-info string (e.g. git-describe output).
+ * @retval 1              Node id loaded from eeprom.
+ * @retval 0              Used default node id.
  */
-void CAN_init(uint16_t node_type,  uint8_t default_id,
+uint8_t CAN_init(uint16_t node_type,  uint8_t default_id,
               uint16_t version_major, uint16_t version_minor, uint16_t version_patch,
               const char *build_info);
+
+
+
+uint8_t CAN_bus_error_warning(void); 
 
 /**
  * @brief Broadcast a NODE_TURNED_ON message onto the bus.
@@ -95,7 +101,7 @@ uint8_t CAN_try_put_msg(h9frame_t *cm);
  * @param cm  Message to transmit.
  * @retval 1  Sent immediately.
  * @retval 2  Queued in the TX ring buffer.
- * @retval 0  TX buffer full; message dropped.
+ * @retval 0  TX buffer full or CAN bus error; message dropped.
  */
 uint8_t CAN_put_msg(h9frame_t *cm);
 

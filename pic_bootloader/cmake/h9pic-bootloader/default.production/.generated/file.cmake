@@ -21,6 +21,7 @@ set(h9pic_bootloader_default_default_XC8_FILE_TYPE_compile
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../can.c")
 set_source_files_properties(${h9pic_bootloader_default_default_XC8_FILE_TYPE_compile} PROPERTIES LANGUAGE C)
 set(h9pic_bootloader_default_default_XC8_FILE_TYPE_link)
+set(h9pic_bootloader_default_default_XC8_FILE_TYPE_objcopy_lss)
 set(h9pic_bootloader_default_image_name "default-production.elf")
 set(h9pic_bootloader_default_image_base_name "default-production")
 

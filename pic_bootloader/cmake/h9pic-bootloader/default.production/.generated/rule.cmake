@@ -143,3 +143,11 @@ function(h9pic_bootloader_default_link_rule target)
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../../../include"
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
 endfunction()
+function(h9pic_bootloader_default_objcopy_lss_rule target)
+    add_custom_command(
+        TARGET ${target}
+        POST_BUILD
+        COMMAND ${OBJDUMP}
+        ARGS --disassemble --wide --demangle --line-numbers --section-headers --source ${h9pic_bootloader_default_image_name} > ${h9pic_bootloader_default_image_base_name}.lss
+        WORKING_DIRECTORY ${h9pic_bootloader_default_output_dir})
+endfunction()

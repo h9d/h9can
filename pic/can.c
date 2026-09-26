@@ -102,8 +102,9 @@ void can_interrupt(void) {
     
 }
 
-void CAN_init(uint16_t node_type, uint8_t default_id, uint16_t version_major, uint16_t version_minor, uint16_t version_patch, const char *build_info) {
-//TODO: mozna doddac STACK FULL kiedy braknie nam stosu i STACK UNDERFLOW kiedy to zepsulismy stos i return nie zadzialal
+uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint16_t version_major, uint16_t version_minor, uint16_t version_patch, const char *build_info) {
+    uint8_t ret = 0;
+    //TODO: mozna doddac STACK FULL kiedy braknie nam stosu i STACK UNDERFLOW kiedy to zepsulismy stos i return nie zadzialal
 //    if (STKPTRbits.STKFUL) {
 //        reset_reason = NODE_RESET_BY_STACK_OVERFLOW;
 //        STKPTRbits.STKFUL = 0;  // wyczyść ręcznie
@@ -140,6 +141,7 @@ void CAN_init(uint16_t node_type, uint8_t default_id, uint16_t version_major, ui
     node_info.node_id = read_node_id_and_refresh();
     if (node_info.node_id == 0xff) {
         node_info.node_id = default_id;
+        ret = 1;
     }
     TRISBbits.TRISB2 = 1; //CANTX ax output
     TRISBbits.TRISB3 = 1; //CANRX ax input
@@ -187,6 +189,12 @@ void CAN_init(uint16_t node_type, uint8_t default_id, uint16_t version_major, ui
     RXB1CON = 0b01000000;
 
     while (CANSTATbits.OPMODE0);
+
+    return ret;
+}
+
+uint8_t CAN_bus_error_warning(void) {
+    return COMSTATbits.TXWARN | COMSTATbits.RXWARN;
 }
 
 void CAN_send_turned_on_broadcast(void) {
@@ -223,8 +231,9 @@ uint8_t CAN_put_msg(h9frame_t *cm) {
     INTCONbits.GIEH = 0;
     INTCONbits.GIEL = 0;
 
-    while (TXB0CONbits.TXREQ == 1 && TXB1CONbits.TXREQ == 1 && TXB2CONbits.TXREQ == 1); //TODO: przerobic zeby przy zajetych kolejkach dodal do buforu wysylania
-    
+    while (TXB0CONbits.TXREQ == 1 && TXB1CONbits.TXREQ == 1 && TXB2CONbits.TXREQ == 1
+           && COMSTATbits.RXBP == 0 && COMSTATbits.TXBP == 0 && COMSTATbits.TXBO == 0); //TODO: przerobic zeby przy zajetych kolejkach dodal do buforu wysylania
+
     if (TXB0CONbits.TXREQ != 1) {
         TXB0EIDH = tempEIDH;
         TXB0EIDL = tempEIDL;
@@ -273,9 +282,29 @@ uint8_t CAN_put_msg(h9frame_t *cm) {
         TXB2D7   = cm->data[7];
         TXB2CONbits.TXREQ = 1;
     }
+    else if (COMSTATbits.RXBP == 1 || COMSTATbits.TXBP == 1) {    //bus passive error
+        TXB2CONbits.TXREQ = 0;
+        while (TXB2CONbits.TXREQ);
+
+        uint8_t faultSIDH, faultSIDL, faultEIDH, faultEIDL;
+        calc_can_broadcast_id(&faultSIDH, &faultSIDL, &faultEIDH, &faultEIDL, H9FRAME_TYPE_NODE_FAULT, node_info.node_id, node_info.node_type);
+
+        TXB2EIDH = faultEIDH;
+        TXB2EIDL = faultEIDL;
+        TXB2SIDH = faultSIDH;
+        TXB2SIDL = faultSIDL;
+        TXB2DLC  = 1;
+        TXB2D0   = NODE_FAULT_CAN_FRAME_LOSS;
+        TXB2CONbits.TXREQ = 1;      // ramka czeka w TXB2 i pojedzie automatycznie po wyjściu z bus-off
+
+        INTCONbits.GIEH = gieh;
+        INTCONbits.GIEL = giel;
+        return 0;
+    }
+
     INTCONbits.GIEH = gieh;
     INTCONbits.GIEL = giel;
-    
+
     return 1;
 }
 
