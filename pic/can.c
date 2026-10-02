@@ -534,6 +534,7 @@ static uint8_t read_hardware_revision(void) {
     TBLPTRH = 0x00;
     TBLPTRL = 0;            // 0x00-0x07
 
+    asm("TBLRD*"); // odczyt do TABLAT
     return TABLAT;
 }
 
