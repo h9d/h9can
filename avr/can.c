@@ -141,7 +141,7 @@ void CAN_init(uint16_t node_type, char hardware_rev, uint16_t version_major, uin
 
     //select mob 2 for broadcast
     CANPAGE = 0x02 << MOBNB0;
-    set_CAN_broadcast_id(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, H9FRAME_BROADCAST_ID);
+    set_CAN_broadcast_id(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, H9FRAME_BROADCAST_ALL_GROUP);
     set_CAN_broadcast_id_mask(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, H9FRAME_NODE_TYPE_MASK);
     CANIDM4 |= 1 << IDEMSK; // set filter
     CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
@@ -259,7 +259,7 @@ uint8_t process_msg(h9frame_t *cm) {
     /* --- BROADCAST --- */
     if (cm->type & H9FRAME_UNICAST_BROADCAST_BIT) {
         if (cm->type == H9FRAME_TYPE_DISCOVER || cm->type == H9FRAME_TYPE_GROUP_RESET) {
-            if (cm->broadcast.group == node_info.node_type || cm->broadcast.group == H9FRAME_BROADCAST_ID) {
+            if (cm->broadcast.group == node_info.node_type || cm->broadcast.group == H9FRAME_BROADCAST_ALL_GROUP) {
                 if (cm->type == H9FRAME_TYPE_DISCOVER) {
                     CAN_send_node_info_broadcast(0);
                     return 0;
