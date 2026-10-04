@@ -122,30 +122,6 @@ void send_node_fault(uint8_t errno);
  */
 uint8_t CAN_get_msg(h9frame_t *cm);
 
-/**
- * @brief Initialise an outgoing message with default fields.
- *
- * Sets priority to LOW, fills in the current node ID as source, clears flags,
- * and sets dlc to 0. The sequence number is assigned automatically just before
- * transmission by CAN_try_put_msg().
- *
- * @param[out] mes  Message structure to initialise.
- */
-void CAN_init_new_msg(h9frame_t *mes);
-
-/**
- * @brief Initialise a response message from a received request.
- *
- * Copies priority and seqnum from @p req, sets source/destination appropriately,
- * and infers the response type:
- * - GET_REG / SET_REG / SET_BIT / CLEAR_BIT → REG_VALUE
- * - DISCOVER → NODE_INFO
- *
- * @param[in]  req  The received request message.
- * @param[out] res  Response message to initialise; dlc is set to 0.
- */
-void CAN_init_response_msg(const h9frame_t *req, h9frame_t *res);
-
 void CAN_send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t *value, size_t length);
 
 #endif //H9CAN_H

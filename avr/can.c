@@ -86,8 +86,6 @@ static void set_CAN_broadcast_id(uint8_t type, uint8_t src, uint16_t node_type);
 static void set_CAN_broadcast_id_mask(uint8_t type, uint8_t src, uint16_t node_type);
 static void send_reg_value1(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value);
 static void send_reg_value2(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2);
-static void send_reg_value3(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3);
-static void send_reg_value4(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4);
 static void send_reg_value6(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4, uint8_t value5, uint8_t value6);
 static void CAN_send_node_info_broadcast(uint8_t turn_on);
 static void process_standard_reg(h9frame_t *cm);
@@ -200,7 +198,11 @@ void CAN_set_msg_filter_2(uint16_t broadcast_group) {
 }
 
 uint8_t CAN_try_put_msg(h9frame_t *cm) {
-    set_mandatory_message_fields(cm);
+    cm->source_id = can_node_id;
+
+    if (cm->type & H9FRAME_UNICAST_BROADCAST_BIT)
+        cm->broadcast.group = node_info.node_type;
+
     uint8_t sreg = SREG;
     cli();
     CANPAGE = 0 << MOBNB0;              // Select MOb0 for transmission
@@ -279,8 +281,6 @@ void send_command_error(uint8_t errno, uint8_t destination, uint8_t seqnum) {
 void send_node_fault(uint8_t errno) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_NODE_FAULT;
-    cm.source_id = can_node_id;
-    cm.broadcast.group = node_info.node_type;
 
     cm.data[0] = errno;
     cm.dlc = 1;
@@ -318,35 +318,6 @@ uint8_t CAN_get_msg(h9frame_t *cm) {
         return process_msg(cm);
     }
     return 0;
-}
-
-void CAN_init_new_msg(h9frame_t *fr) {
-    fr->source_id = can_node_id;
-    fr->unicast.flags = 0;
-    fr->unicast.destination_id = 0;
-    fr->unicast.seqnum = 0;
-    fr->broadcast.group = 0;
-    fr->dlc = 0;
-}
-
-void CAN_init_response_msg(const h9frame_t *req, h9frame_t *res) {
-    res->unicast.seqnum = req->unicast.seqnum;
-    switch (req->type) {
-        case H9FRAME_TYPE_GET_REG:
-        case H9FRAME_TYPE_SET_REG:
-        case H9FRAME_TYPE_SET_BIT:
-        case H9FRAME_TYPE_CLEAR_BIT:
-            res->type = H9FRAME_TYPE_REG_VALUE;
-            break;
-        case H9FRAME_TYPE_DISCOVER:
-            res->type = H9FRAME_TYPE_NODE_INFO;
-            break;
-        default:
-            break;
-    }
-    res->source_id = can_node_id;
-    res->unicast.destination_id = req->source_id;
-    res->dlc = 0;
 }
 
 /* ======================== STATIC FUNCTIONS ======================== */
@@ -478,27 +449,6 @@ static void set_CAN_broadcast_id_mask(uint8_t type, uint8_t src, uint16_t node_t
     calc_can_broadcast_id(&CANIDM1, &CANIDM2, &CANIDM3, &CANIDM4, type | 0x10, src, node_type);
 }
 
-#ifdef __AVR__
-static void set_mandatory_message_fields(h9frame_t *cm) {
-#else
-void set_mandatory_message_fields(h9frame_t *cm) {
-#endif
-    static uint8_t next_seqnum = 0;
-
-    cm->source_id = can_node_id;
-
-    if (cm->type == H9FRAME_TYPE_SET_REG ||
-        cm->type == H9FRAME_TYPE_GET_REG ||
-        cm->type == H9FRAME_TYPE_SET_BIT ||
-        cm->type == H9FRAME_TYPE_CLEAR_BIT ||
-        cm->type == H9FRAME_TYPE_NODE_UPGRADE ||
-        cm->type == H9FRAME_TYPE_NODE_RESET) {
-
-        cm->unicast.seqnum = next_seqnum;
-        ++next_seqnum;
-    }
-}
-
 void CAN_send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t *value, size_t length) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
@@ -565,37 +515,6 @@ static void send_reg_value2(uint8_t registry, uint8_t destination, uint8_t seqnu
     cm.data[1] = value1;
     cm.data[2] = value2;
     cm.dlc = 3;
-    CAN_put_msg(&cm);
-}
-
-static void send_reg_value3(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3) {
-    h9frame_t cm;
-    cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
-    cm.unicast.destination_id = destination;
-    cm.unicast.seqnum = seqnum;
-
-    cm.data[0] = registry;
-    cm.data[1] = value1;
-    cm.data[2] = value2;
-    cm.data[3] = value3;
-    cm.dlc = 4;
-    CAN_put_msg(&cm);
-}
-
-static void send_reg_value4(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4) {
-    h9frame_t cm;
-    cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
-    cm.unicast.destination_id = destination;
-    cm.unicast.seqnum = seqnum;
-
-    cm.data[0] = registry;
-    cm.data[1] = value1;
-    cm.data[2] = value2;
-    cm.data[3] = value3;
-    cm.data[4] = value4;
-    cm.dlc = 5;
     CAN_put_msg(&cm);
 }
 

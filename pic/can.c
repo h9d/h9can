@@ -399,35 +399,6 @@ uint8_t CAN_get_msg(h9frame_t* cm) {
     return 0;
 }
 
-void CAN_init_new_msg(h9frame_t *fr) {
-    fr->source_id = node_info.node_id;
-    fr->unicast.flags = 0;
-    fr->unicast.destination_id = 0;
-    fr->unicast.seqnum = 0;
-    fr->broadcast.group = 0;
-    fr->dlc = 0;
-}
-
-void CAN_init_response_msg(const h9frame_t *req, h9frame_t *res) {
-    res->unicast.seqnum = req->unicast.seqnum;
-    switch (req->type) {
-        case H9FRAME_TYPE_GET_REG:
-        case H9FRAME_TYPE_SET_REG:
-        case H9FRAME_TYPE_SET_BIT:
-        case H9FRAME_TYPE_CLEAR_BIT:
-            res->type = H9FRAME_TYPE_REG_VALUE;
-            break;
-        case H9FRAME_TYPE_DISCOVER:
-            res->type = H9FRAME_TYPE_NODE_INFO;
-            break;
-        default:
-            break;
-    }
-    res->source_id = node_info.node_id;
-    res->unicast.destination_id = req->source_id;
-    res->dlc = 0;
-}
-
 void CAN_send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t *value, size_t length) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
