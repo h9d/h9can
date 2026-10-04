@@ -28,7 +28,9 @@
  * and stores the node metadata used when responding to standard registers.
  *
  * @param node_type       Application-specific node type (16-bit, see doc/nodes.md).
- * @param default_id      Default node id
+ * @param default_id      Node id used when none is stored in EEPROM.
+ * @param pcb_rev         PCB revision, ASCII letter ('A', 'B', ...).
+ * @param bom_rev         BOM revision.
  * @param version_major   Firmware version major number.
  * @param version_minor   Firmware version minor number.
  * @param version_patch   Firmware version patch number.
@@ -36,9 +38,10 @@
  * @retval 1              Node id loaded from eeprom.
  * @retval 0              Used default node id.
  */
-uint8_t CAN_init(uint16_t node_type,  uint8_t default_id,
-              uint16_t version_major, uint16_t version_minor, uint16_t version_patch,
-              const char *build_info);
+uint8_t CAN_init(uint16_t node_type, uint8_t default_id,
+                 uint8_t pcb_rev, uint8_t bom_rev,
+                 uint16_t version_major, uint16_t version_minor, uint16_t version_patch,
+                 const char *build_info);
 
 
 

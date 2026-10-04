@@ -93,13 +93,21 @@ void main(void) {
     h9frame_t turn_on_msg;
 
     turn_on_msg.type = H9FRAME_TYPE_BOOTLOADER_TURNED_ON;
+    turn_on_msg.broadcast.group = NODE_TYPE;
     turn_on_msg.dlc = 8;
-    turn_on_msg.data[0] = (VERSION_MAJOR >> 8);
-    turn_on_msg.data[1] = VERSION_MAJOR & 0xff;
-    turn_on_msg.data[2] = (VERSION_MINOR >> 8);
-    turn_on_msg.data[3] = VERSION_MINOR & 0xff;
-    turn_on_msg.data[4] = (VERSION_PATCH >> 8) & 0xff;
-    turn_on_msg.data[5] = VERSION_PATCH & 0xff;
+
+    // version packed big-endian into 32 bits: major (10 bits) | minor (11 bits) | patch (11 bits)
+#if VERSION_MAJOR > 0x3ff || VERSION_MINOR > 0x7ff || VERSION_PATCH > 0x7ff
+#error "Bootloader version out of range (major 0-1023, minor/patch 0-2047)"
+#endif
+    const uint32_t version = ((uint32_t)VERSION_MAJOR << 22) | ((uint32_t)VERSION_MINOR << 11) | (uint32_t)VERSION_PATCH;
+    turn_on_msg.data[0] = (version >> 24) & 0xff;
+    turn_on_msg.data[1] = (version >> 16) & 0xff;
+    turn_on_msg.data[2] = (version >> 8) & 0xff;
+    turn_on_msg.data[3] = version & 0xff;
+
+    turn_on_msg.data[4] = PCB_REVISION;
+    turn_on_msg.data[5] = BOM_REVISION;
     turn_on_msg.data[6] = NODE_MCU_PIC18F46K80;
 #if _XTAL_FREQ == 16000000
     turn_on_msg.data[7] = NODE_MCU_F_16MHz;
@@ -137,7 +145,6 @@ void main(void) {
             }
         }
         else {
-            turn_on_msg.unicast.seqnum = seqnum++;
             CAN_put_msg_blocking(&turn_on_msg);
         }
     }

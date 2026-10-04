@@ -29,7 +29,7 @@ enum {
     H9FRAME_TYPE_NODE_UPGRADE =  14,
     H9FRAME_TYPE_NODE_RESET =  15,
 
-    /* --- SPECIAL BROADCAST --- */
+    /* --- SPECIAL BROADCAST (TO GROUP NOT FROM)--- */
     H9FRAME_TYPE_DISCOVER = 16,
     H9FRAME_TYPE_GROUP_RESET = 17,
 
@@ -103,7 +103,8 @@ enum {
 
 enum {
     NODE_FAULT_POWER_OUTAGE = 1,
-    NODE_FAULT_CAN_FRAME_LOSS,
+    NODE_FAULT_CAN_FRAME_LOSS,          // TX frame dropped (bus passive / bus off)
+    NODE_FAULT_CAN_RX_FRAME_LOSS,       // RX frame dropped (receive buffer overflow)
     NODE_FAULT_NODE_SPECIFIC_FIRST_FAULT
 };
 

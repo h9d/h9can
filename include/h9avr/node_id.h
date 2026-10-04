@@ -37,16 +37,13 @@ static uint16_t crc16(const void* data, size_t length) {
     return crc;
 }
 
-static uint8_t read_node_id(uint16_t* node_type) {
+static uint8_t read_node_id(void) {
     h9node_id_t id_struct;
 
     for (uint8_t i = 0; i < EEPROM_NODE_ID_BLOCK_COUNT; i++) {
         eeprom_read_block(&id_struct, (void*)(sizeof(id_struct) * i), sizeof(id_struct));
 
         if (id_struct.crc == crc16(&id_struct, offsetof(h9node_id_t, crc)) && id_struct.flags == EEPROM_BLOCK_VALID) {
-            if (node_type) {
-                *node_type = id_struct.node_type;
-            }
             return id_struct.node_id;
         }
     }

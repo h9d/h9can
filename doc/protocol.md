@@ -40,7 +40,7 @@ regardless of type.
 | 0x01  | `PAGE_START`                | host → node   | Begin flashing a page              |
 | 0x02  | `QUIT_BOOTLOADER`           | host → node   | Exit bootloader, jump to app       |
 | 0x03  | `PAGE_FILL`                 | host → node   | 8 bytes of page data               |
-| 0x04  | `BOOTLOADER_TURNED_ON`      | node → bcast  | Bootloader announce (sent as unicast to 0xFF) |
+| 0x04  | `RES2`                      | —             | Reserved                           |
 | 0x05  | `PAGE_FILL_NEXT`            | node → host   | Ready for next PAGE_FILL           |
 | 0x06  | `PAGE_WRITED`               | node → host   | Page committed to flash            |
 | 0x07  | `PAGE_FILL_BREAK`           | node → host   | Page fill aborted                  |
@@ -64,15 +64,14 @@ regardless of type.
 | 0x14  | `NODE_HEARTBEAT`            | node   | Periodic heartbeat                        |
 | 0x15  | `NODE_INFO`                 | node   | Response to DISCOVER                      |
 | 0x16  | `NODE_TURNED_ON`            | node   | Node finished startup                     |
-| 0x17  | `RES2`                      | —      | Reserved                                  |
+| 0x17  | `BOOTLOADER_TURNED_ON`      | node   | Bootloader started, ready for flashing    |
 | 0x18–0x1F | `NODE_SPECIFIC_BROADCAST0–7` | node | Application-defined broadcasts       |
 
 ---
 
 ## Node addressing
 
-Node IDs are 8-bit values (1–254). ID 0 is reserved; ID 255 (0xFF) is used by
-the bootloader as a broadcast destination for `BOOTLOADER_TURNED_ON`.
+Node IDs are 8-bit values (1–254). ID 0 is reserved.
 
 Node IDs are stored in EEPROM and read on startup by `CAN_init()`. They can be
 changed at runtime via register 9 (`NODE_ID_STD_REGISTER`); the new value takes
@@ -87,8 +86,8 @@ effect after the next reset.
 ```
 Application         CAN bus
     │
-    ├─ CAN_init(type, rev, version, build_info)
-    │     reads node_id from EEPROM
+    ├─ CAN_init(type, default_id, pcb_rev, bom_rev, version, build_info)
+    │     reads node_id from EEPROM (default_id if none stored)
     │     configures CAN peripheral and message filters
     │
     ├─ sei()
@@ -106,7 +105,7 @@ Both messages carry the same 8-byte payload:
 data[0..1]  node_type    (uint16, big-endian)
 data[2..3]  version_major (uint16, big-endian)
 data[4..5]  version_minor (uint16, big-endian)
-data[6]     hardware_revision (ASCII char, e.g. 'a')
+data[6]     pcb_revision (ASCII char, e.g. 'A')
 data[7]     reset_reason  (see NODE_RESET_BY_* in h9def.h)
 ```
 
@@ -165,17 +164,22 @@ Host                                Node (application)
  │◄── BOOTLOADER_TURNED_ON (bcast) ───────┤
 ```
 
-`BOOTLOADER_TURNED_ON` is sent as a unicast frame with `dst_id = 0xFF` and
-`priority = HIGH`. It is re-sent periodically if no PAGE_START is received
+`BOOTLOADER_TURNED_ON` is a broadcast frame with `group = NODE_TYPE`. It is
+re-sent periodically until `PAGE_START` or `QUIT_BOOTLOADER` is received
 (keepalive).
 
 ```
-data[0]  BOOTLOADER_VERSION_MAJOR
-data[1]  BOOTLOADER_VERSION_MINOR
-data[2]  MCU type (NODE_MCU_* enum)
-data[3]  MCU frequency (NODE_MCU_F_* enum)
-dlc = 4
+data[0..3]  bootloader version, packed big-endian uint32:
+            major bits 31-22 (10 bits), minor bits 21-11 (11 bits), patch bits 10-0 (11 bits)
+data[4]     PCB revision, ASCII letter ('A', 'B', ...)
+data[5]     BOM revision
+data[6]     MCU type (NODE_MCU_* enum)
+data[7]     MCU frequency (NODE_MCU_F_* enum)
+dlc = 8
 ```
+
+`NODE_TYPE`, `PCB_REVISION` and `BOM_REVISION` are set when building the
+bootloader, see `avr_bootloader/README.md`.
 
 ### Flashing a page
 
@@ -224,10 +228,13 @@ Host                                Node (bootloader)
 
 ```c
 /* Initialise CAN peripheral, read node ID from EEPROM, configure filters.
- * Call before sei(). */
-void CAN_init(uint16_t node_type, char hardware_rev,
-              uint16_t version_major, uint16_t version_minor,
-              const char *build_info);
+ * Call before sei().
+ *   returns 1  – node ID loaded from EEPROM
+ *   returns 0  – no ID in EEPROM, default_id used */
+uint8_t CAN_init(uint16_t node_type, uint8_t default_id,
+                 uint8_t pcb_rev, uint8_t bom_rev,
+                 uint16_t version_major, uint16_t version_minor, uint16_t version_patch,
+                 const char *build_info);
 
 /* Send NODE_TURNED_ON broadcast. Call after sei() and a short delay. */
 void CAN_send_turned_on_broadcast(void);

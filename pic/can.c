@@ -24,7 +24,8 @@
 static struct {
     uint8_t node_id;
     uint16_t node_type;
-    char hardware_revision;
+    uint8_t pcb_revision;
+    uint8_t bom_revision;
     uint16_t version_major;
     uint16_t version_minor;
     uint16_t version_patch;
@@ -52,7 +53,6 @@ void (*read_power_supply_register)(uint8_t, uint8_t) = NULL;
 static void calc_can_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, h9frame_t *cm);
 static void calc_can_unicast_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, uint8_t type, uint8_t flags, uint8_t src, uint8_t dst, uint8_t seq);
 static void calc_can_broadcast_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, uint8_t type, uint8_t src, uint16_t node_type);
-static void send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t *value, size_t length);
 static void send_reg_value1(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value);
 static void send_reg_value2(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2);
 static void send_reg_value3(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3);
@@ -61,7 +61,6 @@ static void send_reg_value6(uint8_t registry, uint8_t destination, uint8_t seqnu
 static void CAN_send_node_info_broadcast(uint8_t turn_on);
 static void process_standard_reg(h9frame_t *cm);
 static uint8_t process_msg(h9frame_t *cm);
-static uint8_t read_hardware_revision(void);
 static void can_set_mode(uint8_t mode);
 
 
@@ -119,8 +118,8 @@ void can_interrupt(void) {
     
 }
 
-uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint16_t version_major, uint16_t version_minor, uint16_t version_patch, const char *build_info) {
-    uint8_t ret = 0;
+uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint8_t pcb_rev, uint8_t bom_rev, uint16_t version_major, uint16_t version_minor, uint16_t version_patch, const char *build_info) {
+    uint8_t ret = 1;
     //TODO: mozna doddac STACK FULL kiedy braknie nam stosu i STACK UNDERFLOW kiedy to zepsulismy stos i return nie zadzialal
 //    if (STKPTRbits.STKFUL) {
 //        reset_reason = NODE_RESET_BY_STACK_OVERFLOW;
@@ -149,16 +148,17 @@ uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint16_t version_major,
     RCONbits.RI  = 1;
     
     node_info.node_type = node_type;
-    node_info.hardware_revision = read_hardware_revision();
+    node_info.pcb_revision = pcb_rev;
+    node_info.bom_revision = bom_rev;
     node_info.version_major = version_major;
     node_info.version_minor = version_minor;
     node_info.version_patch = version_patch;
     strncpy(node_info.build_info, build_info, H9FRAME_MAX_REGISTER_SIZE);
     
     node_info.node_id = read_node_id_and_refresh();
-    if (node_info.node_id == 0xff) {
+    if (node_info.node_id == 0xff) {    // no valid id in EEPROM
         node_info.node_id = default_id;
-        ret = 1;
+        ret = 0;
     }
     TRISBbits.TRISB2 = 1; //CANTX ax output
     TRISBbits.TRISB3 = 1; //CANRX ax input
@@ -371,7 +371,7 @@ uint8_t CAN_get_msg(h9frame_t* cm) {
         can_rx_buf_overflow = 0;
         COMSTATbits.RXB0OVFL = 0;
         COMSTATbits.RXB1OVFL = 0;
-        send_node_fault(NODE_FAULT_CAN_FRAME_LOSS);
+        send_node_fault(NODE_FAULT_CAN_RX_FRAME_LOSS);
     }
 
     if (can_rx_buf_top != can_rx_buf_bottom) {
@@ -563,7 +563,7 @@ static void CAN_send_node_info_broadcast(uint8_t turn_on) {
     cm.data[3] = node_info.version_major & 0xff;
     cm.data[4] = (node_info.version_minor >> 8) & 0xff;
     cm.data[5] = node_info.version_minor & 0xff;
-    cm.data[6] = node_info.hardware_revision;
+    cm.data[6] = node_info.pcb_revision;
     cm.data[7] = node_info.reset_reason;
     CAN_put_msg(&cm);
 }
@@ -571,16 +571,6 @@ static void CAN_send_node_info_broadcast(uint8_t turn_on) {
 static void can_set_mode(uint8_t mode) {
     CANCON = mode;
     while ((CANSTAT & 0xE0) != mode);
-}
-
-static uint8_t read_hardware_revision(void) {
-    // index 0-7 → adresy 0x200000-0x200007
-    TBLPTRU = 0x20;          // górny bajt adresu
-    TBLPTRH = 0x00;
-    TBLPTRL = 0;            // 0x00-0x07
-
-    asm("TBLRD*"); // odczyt do TABLAT
-    return TABLAT;
 }
 
 static uint32_t read_serial_numer(void) {
@@ -635,7 +625,7 @@ static void process_standard_reg(h9frame_t *cm) {
                 send_reg_value2(NODE_TYPE_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (node_info.node_type >> 8) & 0xff, (node_info.node_type) & 0xff);
                 return;
             case NODE_HARDWARE_REVISION_STD_REGISTER:
-                send_reg_value1(NODE_HARDWARE_REVISION_STD_REGISTER, cm->source_id, cm->unicast.seqnum, node_info.hardware_revision);
+                send_reg_value2(NODE_HARDWARE_REVISION_STD_REGISTER, cm->source_id, cm->unicast.seqnum, node_info.pcb_revision, node_info.bom_revision);
                 return;
             case NODE_VERSION_STD_REGISTER:
                 send_reg_value6(NODE_VERSION_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (node_info.version_major >> 8), node_info.version_major & 0xff, (node_info.version_minor >> 8) & 0xff, node_info.version_minor & 0xff, (node_info.version_patch >> 8) & 0xff, node_info.version_patch & 0xff);

@@ -108,16 +108,22 @@ int main(void) {
 
     turn_on_msg.type = H9FRAME_TYPE_BOOTLOADER_TURNED_ON;
     turn_on_msg.source_id = can_node_id;
-    turn_on_msg.broadcast.group = can_node_type;
+    turn_on_msg.broadcast.group = NODE_TYPE;
     turn_on_msg.dlc = 8;
 
-	turn_on_msg.data[0] = (can_node_type >> 8) & 0xff;
-    turn_on_msg.data[1] = (can_node_type) & 0xff;
+    // version packed big-endian into 32 bits: major (10 bits) | minor (11 bits) | patch (11 bits)
+#if BOOTLOADER_VERSION_MAJOR > 0x3ff || BOOTLOADER_VERSION_MINOR > 0x7ff || BOOTLOADER_VERSION_PATCH > 0x7ff
+#error "Bootloader version out of range (major 0-1023, minor/patch 0-2047)"
+#endif
+    const uint32_t version = ((uint32_t)BOOTLOADER_VERSION_MAJOR << 22) | ((uint32_t)BOOTLOADER_VERSION_MINOR << 11) | (uint32_t)BOOTLOADER_VERSION_PATCH;
+    turn_on_msg.data[0] = (version >> 24) & 0xff;
+    turn_on_msg.data[1] = (version >> 16) & 0xff;
+    turn_on_msg.data[2] = (version >> 8) & 0xff;
+    turn_on_msg.data[3] = version & 0xff;
 
-    turn_on_msg.data[2] = (BOOTLOADER_VERSION_MAJOR >> 8) & 0xff;
-    turn_on_msg.data[3] = (BOOTLOADER_VERSION_MAJOR) & 0xff;
-    turn_on_msg.data[4] = (BOOTLOADER_VERSION_MINOR >> 8);
-    turn_on_msg.data[5] = BOOTLOADER_VERSION_MINOR & 0xff;
+    turn_on_msg.data[4] = PCB_REVISION;
+    turn_on_msg.data[5] = BOM_REVISION;
+
 #if defined (__AVR_ATmega16M1__)
     turn_on_msg.data[6] = NODE_MCU_ATMEGA16M1;
 #elif defined (__AVR_ATmega32M1__)
@@ -170,7 +176,6 @@ int main(void) {
             }
         }
         else {
-            turn_on_msg.unicast.seqnum = seqnum++;
             CAN_put_msg_blocking(&turn_on_msg);
         }
     }

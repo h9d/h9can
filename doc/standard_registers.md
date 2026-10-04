@@ -21,11 +21,11 @@ On error the node replies with `COMMAND_ERROR` (0x08): `data[0]` = error code.
 | # | Constant                         | Access | Size    | Description                     |
 |---|----------------------------------|--------|---------|---------------------------------|
 | 0 | `NODE_TYPE_STD_REGISTER`         | R      | 2 bytes | Node type                       |
-| 1 | `NODE_HARDWARE_REVISION_STD_REGISTER` | R | 1 byte  | Hardware revision letter        |
+| 1 | `NODE_HARDWARE_REVISION_STD_REGISTER` | R | 2 bytes | PCB revision letter, BOM revision |
 | 2 | `NODE_VERSION_STD_REGISTER`      | R      | 4 bytes | Firmware version (major, minor) |
 | 3 | `NODE_BUILD_INFO_STD_REGISTER`   | R      | ≤7 bytes| Build info string               |
 | 4 | `NODE_MCU_TYPE_STD_REGISTER`     | R      | 1 byte  | MCU type enum                   |
-| 5 | `NODE_SN_STD_REGISTER`           | R      | 4 bytes | Serial number                   |
+| 5 | `NODE_SN_STD_REGISTER`           | R      | 10 bytes (AVR) / 4 bytes (PIC) | Serial number |
 | 6 | `NODE_RESET_REASON_STD_REGISTER` | R      | 1 byte  | Reason for last reset           |
 | 7 | `NODE_POWER_SUPPLY_STD_REGISTER` | —      | —       | Not implemented                 |
 | 8 | `NODE_MCU_TEMP_STD_REGISTER`     | —      | —       | Not implemented                 |
@@ -48,12 +48,12 @@ Known node types are listed in `doc/nodes.md`.
 
 ### Register 1 — NODE_HARDWARE_REVISION
 
-Read-only. Returns a single ASCII character identifying the hardware revision
-(`'a'`, `'b'`, …). Set at `CAN_init()`.
+Read-only. Returns the PCB revision as an ASCII letter (`'A'`, `'B'`, …)
+followed by the BOM revision (uint8). Both are passed to `CAN_init()`.
 
 ```
 GET_REG   data: [0x01]
-REG_VALUE data: [0x01, rev]       e.g. [0x01, 0x61] for 'a'
+REG_VALUE data: [0x01, pcb, bom]  e.g. [0x01, 0x42, 0x01] for PCB 'B', BOM 1
 ```
 
 ---
@@ -110,12 +110,18 @@ REG_VALUE data: [0x04, mcu_type]
 
 ### Register 5 — NODE_SN
 
-Read-only. Intended for a unique hardware serial number. Currently always returns
-four zero bytes.
+Read-only. Unique hardware serial number; the size depends on the MCU:
+
+- **AVR (ATmega16/32/64 M1/C1)** — 10 bytes, the factory serial number from the
+  signature row (addresses 0x000E–0x0017: lot number, wafer number and die X/Y
+  coordinates). Not documented for the M1/C1 family, the same block is documented
+  as the serial number for ATmega328PB. Sent as a multi-frame `REG_VALUE`.
+- **PIC (PIC18F46K80)** — 4 bytes from User ID memory (0x200001–0x200004), written
+  when programming the device (see `doc/SN.md`).
 
 ```
 GET_REG   data: [0x05]
-REG_VALUE data: [0x05, 0x00, 0x00, 0x00, 0x00]
+REG_VALUE data: [0x05, sn0, sn1, ...]
 ```
 
 ---

@@ -17,6 +17,24 @@ set(AVR_MCU   "atmega32m1" CACHE STRING "Bootloader MCU variant to flash")
 set(AVR_F_CPU "16000000"   CACHE STRING "CPU frequency in Hz for flash target")
 
 # ---------------------------------------------------------------------------
+# Node identity reported in BOOTLOADER_TURNED_ON — required, set with -D
+# ---------------------------------------------------------------------------
+set(NODE_TYPE    "" CACHE STRING "Node type reported by the bootloader (e.g. 0x0102)")
+set(PCB_REVISION "" CACHE STRING "PCB revision reported by the bootloader (letter A-Z)")
+set(BOM_REVISION "" CACHE STRING "BOM revision reported by the bootloader (0-255)")
+
+set(_MISSING_NODE_VARS "")
+foreach (_var IN ITEMS NODE_TYPE PCB_REVISION BOM_REVISION)
+    if ("${${_var}}" STREQUAL "")
+        list(APPEND _MISSING_NODE_VARS ${_var})
+    endif ()
+endforeach ()
+
+if (NOT "${PCB_REVISION}" STREQUAL "" AND NOT PCB_REVISION MATCHES "^[A-Z]$")
+    message(FATAL_ERROR "PCB_REVISION must be a single letter A-Z, got '${PCB_REVISION}'")
+endif ()
+
+# ---------------------------------------------------------------------------
 # Versioning — git describe from h9can repo root
 # ---------------------------------------------------------------------------
 set(_H9CAN_ROOT    ${CMAKE_CURRENT_LIST_DIR}/..)
@@ -31,17 +49,33 @@ set(_VERSION_ARGS
     -D SOURCE_DIR=${_H9CAN_ROOT}
     -D TEMPLATE_FILE=${_CONFIG_H_IN}
     -D OUTPUT_FILE=${_CONFIG_H_OUT}
+    -D NODE_TYPE=${NODE_TYPE}
+    -D PCB_REVISION=${PCB_REVISION}
+    -D BOM_REVISION=${BOM_REVISION}
     -P "${_GIT_DESCRIBE}"
 )
 
-# Generate an initial config.h at configure time
-execute_process(COMMAND ${CMAKE_COMMAND} ${_VERSION_ARGS})
+if (_MISSING_NODE_VARS)
+    # Don't fail configuration (h9can is also pulled in by application projects),
+    # fail only when the bootloader itself is being built.
+    string(REPLACE ";" ", " _MISSING_NODE_VARS "${_MISSING_NODE_VARS}")
+    message(STATUS "Bootloader: ${_MISSING_NODE_VARS} not set (-D<VAR>=<value>), bootloader targets will not build")
 
-# Re-generate on every build so the version string stays current
-add_custom_target(generate_bootloader_version ALL
-    COMMAND ${CMAKE_COMMAND} ${_VERSION_ARGS}
-    COMMENT "Generating bootloader config.h"
-)
+    add_custom_target(generate_bootloader_version ALL
+        COMMAND ${CMAKE_COMMAND} -E echo "ERROR: bootloader requires ${_MISSING_NODE_VARS}, set with -D<VAR>=<value> (see avr_bootloader/README.md)"
+        COMMAND ${CMAKE_COMMAND} -E false
+        VERBATIM
+    )
+else ()
+    # Generate an initial config.h at configure time
+    execute_process(COMMAND ${CMAKE_COMMAND} ${_VERSION_ARGS})
+
+    # Re-generate on every build so the version string stays current
+    add_custom_target(generate_bootloader_version ALL
+        COMMAND ${CMAKE_COMMAND} ${_VERSION_ARGS}
+        COMMENT "Generating bootloader config.h"
+    )
+endif ()
 
 # ---------------------------------------------------------------------------
 # Build all MCU × frequency variants
@@ -54,7 +88,7 @@ foreach (mmcu IN LISTS avr_mmcus)
 
         add_executable(${TARGET} ${SOURCE_FILES})
         set_target_properties(${TARGET} PROPERTIES SUFFIX ".elf")
-        target_include_directories(${TARGET} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+        target_include_directories(${TARGET} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_CURRENT_LIST_DIR}/../include")
         target_compile_options(${TARGET} PRIVATE
                 -mmcu=${mmcu}
                 -DF_CPU=${fcpu_${freq}}
