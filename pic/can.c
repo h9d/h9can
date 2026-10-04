@@ -17,6 +17,9 @@
 #define CAN_RX_BUF_SIZE 16
 #define CAN_RX_BUF_INDEX_MASK 0x0F
 
+#define CAN_MODE_NORMAL 0x00
+#define CAN_MODE_CONFIG 0x80
+
 
 static struct {
     uint8_t node_id;
@@ -42,6 +45,7 @@ typedef struct {
 can_buf_t can_rx_buf[CAN_RX_BUF_SIZE];
 volatile uint8_t can_rx_buf_top = 0;
 volatile uint8_t can_rx_buf_bottom = 0;
+static volatile uint8_t can_rx_buf_overflow = 0;
 
 void (*read_power_supply_register)(uint8_t, uint8_t) = NULL;
 
@@ -58,45 +62,58 @@ static void CAN_send_node_info_broadcast(uint8_t turn_on);
 static void process_standard_reg(h9frame_t *cm);
 static uint8_t process_msg(h9frame_t *cm);
 static uint8_t read_hardware_revision(void);
+static void can_set_mode(uint8_t mode);
 
 
 void can_interrupt(void) {
     if (PIE5bits.RXB0IE && PIR5bits.RXB0IF) {
         PIR5bits.RXB0IF = 0;
-        can_rx_buf[can_rx_buf_top].txbSIDH = RXB0SIDH;
-        can_rx_buf[can_rx_buf_top].txbSIDL = RXB0SIDL;
-        can_rx_buf[can_rx_buf_top].txbEIDH = RXB0EIDH;
-        can_rx_buf[can_rx_buf_top].txbEIDL = RXB0EIDL;
-        can_rx_buf[can_rx_buf_top].txbDLC = RXB0DLC;
-        can_rx_buf[can_rx_buf_top].data[0] = RXB0D0;
-        can_rx_buf[can_rx_buf_top].data[1] = RXB0D1;
-        can_rx_buf[can_rx_buf_top].data[2] = RXB0D2;
-        can_rx_buf[can_rx_buf_top].data[3] = RXB0D3;
-        can_rx_buf[can_rx_buf_top].data[4] = RXB0D4;
-        can_rx_buf[can_rx_buf_top].data[5] = RXB0D5;
-        can_rx_buf[can_rx_buf_top].data[6] = RXB0D6;
-        can_rx_buf[can_rx_buf_top].data[7] = RXB0D7;
+        uint8_t next_top = (uint8_t)((can_rx_buf_top + 1) & CAN_RX_BUF_INDEX_MASK);
+        if (next_top == can_rx_buf_bottom) {
+            can_rx_buf_overflow = 1;
+        }
+        else {
+            can_rx_buf[can_rx_buf_top].txbSIDH = RXB0SIDH;
+            can_rx_buf[can_rx_buf_top].txbSIDL = RXB0SIDL;
+            can_rx_buf[can_rx_buf_top].txbEIDH = RXB0EIDH;
+            can_rx_buf[can_rx_buf_top].txbEIDL = RXB0EIDL;
+            can_rx_buf[can_rx_buf_top].txbDLC = RXB0DLC;
+            can_rx_buf[can_rx_buf_top].data[0] = RXB0D0;
+            can_rx_buf[can_rx_buf_top].data[1] = RXB0D1;
+            can_rx_buf[can_rx_buf_top].data[2] = RXB0D2;
+            can_rx_buf[can_rx_buf_top].data[3] = RXB0D3;
+            can_rx_buf[can_rx_buf_top].data[4] = RXB0D4;
+            can_rx_buf[can_rx_buf_top].data[5] = RXB0D5;
+            can_rx_buf[can_rx_buf_top].data[6] = RXB0D6;
+            can_rx_buf[can_rx_buf_top].data[7] = RXB0D7;
 
-        can_rx_buf_top = (uint8_t)((can_rx_buf_top + 1) & CAN_RX_BUF_INDEX_MASK);
+            can_rx_buf_top = next_top;
+        }
         RXB0CONbits.RXFUL = 0;
     }
     if (PIE5bits.RXB1IE && PIR5bits.RXB1IF) {
         PIR5bits.RXB1IF = 0;
-        can_rx_buf[can_rx_buf_top].txbSIDH = RXB1SIDH;
-        can_rx_buf[can_rx_buf_top].txbSIDL = RXB1SIDL;
-        can_rx_buf[can_rx_buf_top].txbEIDH = RXB1EIDH;
-        can_rx_buf[can_rx_buf_top].txbEIDL = RXB1EIDL;
-        can_rx_buf[can_rx_buf_top].txbDLC = RXB1DLC;
-        can_rx_buf[can_rx_buf_top].data[0] = RXB1D0;
-        can_rx_buf[can_rx_buf_top].data[1] = RXB1D1;
-        can_rx_buf[can_rx_buf_top].data[2] = RXB1D2;
-        can_rx_buf[can_rx_buf_top].data[3] = RXB1D3;
-        can_rx_buf[can_rx_buf_top].data[4] = RXB1D4;
-        can_rx_buf[can_rx_buf_top].data[5] = RXB1D5;
-        can_rx_buf[can_rx_buf_top].data[6] = RXB1D6;
-        can_rx_buf[can_rx_buf_top].data[7] = RXB1D7;
+        uint8_t next_top = (uint8_t)((can_rx_buf_top + 1) & CAN_RX_BUF_INDEX_MASK);
+        if (next_top == can_rx_buf_bottom) {
+            can_rx_buf_overflow = 1;
+        }
+        else {
+            can_rx_buf[can_rx_buf_top].txbSIDH = RXB1SIDH;
+            can_rx_buf[can_rx_buf_top].txbSIDL = RXB1SIDL;
+            can_rx_buf[can_rx_buf_top].txbEIDH = RXB1EIDH;
+            can_rx_buf[can_rx_buf_top].txbEIDL = RXB1EIDL;
+            can_rx_buf[can_rx_buf_top].txbDLC = RXB1DLC;
+            can_rx_buf[can_rx_buf_top].data[0] = RXB1D0;
+            can_rx_buf[can_rx_buf_top].data[1] = RXB1D1;
+            can_rx_buf[can_rx_buf_top].data[2] = RXB1D2;
+            can_rx_buf[can_rx_buf_top].data[3] = RXB1D3;
+            can_rx_buf[can_rx_buf_top].data[4] = RXB1D4;
+            can_rx_buf[can_rx_buf_top].data[5] = RXB1D5;
+            can_rx_buf[can_rx_buf_top].data[6] = RXB1D6;
+            can_rx_buf[can_rx_buf_top].data[7] = RXB1D7;
 
-        can_rx_buf_top = (uint8_t)((can_rx_buf_top + 1) & CAN_RX_BUF_INDEX_MASK);
+            can_rx_buf_top = next_top;
+        }
         RXB1CONbits.RXFUL = 0;
     }
     
@@ -146,21 +163,27 @@ uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint16_t version_major,
     TRISBbits.TRISB2 = 1; //CANTX ax output
     TRISBbits.TRISB3 = 1; //CANRX ax input
     
-    CANCON = 0b10000000;
-    while (0x80 != (CANSTAT & 0xE0));
+    can_set_mode(CAN_MODE_CONFIG);
 
     ECANCON = 0x00;
 
     CIOCON = 0x21; // ?? 1 clock source
 
-    //mask for RXF0
+    // Mode 0: RXM0 is shared by RXF0 - RXF1 (RXB0), RXM1 by RXF2 - RXF5 (RXB1).
+    // Filter registers are undefined after reset and all six are always enabled, so every one must be set.
+
+    //RXB0: unicast to this node (RXF1 duplicates RXF0)
     calc_can_unicast_id(&RXM0SIDH, &RXM0SIDL, &RXM0EIDH, &RXM0EIDL, H9FRAME_UNICAST_MSG_TYPE_GROUP_MASK, 0, 0, H9FRAME_ID_MASK, 0);
     calc_can_unicast_id(&RXF0SIDH, &RXF0SIDL, &RXF0EIDH, &RXF0EIDL, H9FRAME_UNICAST_MSG_TYPE_GROUP, 0, 0, node_info.node_id, 0);
+    calc_can_unicast_id(&RXF1SIDH, &RXF1SIDL, &RXF1EIDH, &RXF1EIDL, H9FRAME_UNICAST_MSG_TYPE_GROUP, 0, 0, node_info.node_id, 0);
 
-    //mask for RXF1 - RXF5
-    calc_can_broadcast_id(&RXM1SIDH, &RXM1SIDL, &RXM1EIDH, &RXM1EIDL, H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, H9FRAME_NODE_TYPE_MASK);
-    calc_can_broadcast_id(&RXF1SIDH, &RXF1SIDL, &RXF1EIDH, &RXF1EIDL, H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, H9FRAME_BROADCAST_ALL_GROUP);
-    calc_can_broadcast_id(&RXF2SIDH, &RXF2SIDL, &RXF2EIDH, &RXF2EIDL, H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, node_type);
+    //RXB1: all broadcast types (16-31) for a given group; DISCOVER/GROUP_RESET are picked out in process_msg
+    //(RXF4, RXF5 are placeholders until CAN_set_msg_filter_1/2)
+    calc_can_broadcast_id(&RXM1SIDH, &RXM1SIDL, &RXM1EIDH, &RXM1EIDL, H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, H9FRAME_NODE_TYPE_MASK);
+    calc_can_broadcast_id(&RXF2SIDH, &RXF2SIDL, &RXF2EIDH, &RXF2EIDL, H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, 0, H9FRAME_BROADCAST_ALL_GROUP);
+    calc_can_broadcast_id(&RXF3SIDH, &RXF3SIDL, &RXF3EIDH, &RXF3EIDL, H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, 0, node_type);
+    calc_can_broadcast_id(&RXF4SIDH, &RXF4SIDL, &RXF4EIDH, &RXF4EIDL, H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, 0, node_type);
+    calc_can_broadcast_id(&RXF5SIDH, &RXF5SIDL, &RXF5EIDH, &RXF5EIDL, H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, 0, node_type);
 
     /**
         Baud rate: 125kbps
@@ -183,12 +206,10 @@ uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint16_t version_major,
     PIE5bits.RXB1IE = 1;    //enable
     IPR5bits.RXB1IP = 0;    //low priority
     
-    CANCON = 0;
-
     RXB0CON = 0b01000000;
     RXB1CON = 0b01000000;
 
-    while (CANSTATbits.OPMODE0);
+    can_set_mode(CAN_MODE_NORMAL);
 
     return ret;
 }
@@ -201,12 +222,17 @@ void CAN_send_turned_on_broadcast(void) {
     CAN_send_node_info_broadcast(1);
 }
 
+// Filter registers are writable in Configuration mode only
 void CAN_set_msg_filter_1(uint16_t broadcast_group) {
-    calc_can_broadcast_id(&RXF3SIDH, &RXF3SIDL, &RXF3EIDH, &RXF3EIDL, H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, broadcast_group);
+    can_set_mode(CAN_MODE_CONFIG);
+    calc_can_broadcast_id(&RXF4SIDH, &RXF4SIDL, &RXF4EIDH, &RXF4EIDL, H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, 0, broadcast_group);
+    can_set_mode(CAN_MODE_NORMAL);
 }
 
 void CAN_set_msg_filter_2(uint16_t broadcast_group) {
-    calc_can_broadcast_id(&RXF4SIDH, &RXF4SIDL, &RXF4EIDH, &RXF4EIDL, H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, broadcast_group);
+    can_set_mode(CAN_MODE_CONFIG);
+    calc_can_broadcast_id(&RXF5SIDH, &RXF5SIDL, &RXF5EIDH, &RXF5EIDL, H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, 0, broadcast_group);
+    can_set_mode(CAN_MODE_NORMAL);
 }
 
 uint8_t CAN_put_msg(h9frame_t *cm) {
@@ -228,78 +254,84 @@ uint8_t CAN_put_msg(h9frame_t *cm) {
     uint8_t gieh = INTCONbits.GIEH;
     uint8_t giel = INTCONbits.GIEL;
 
-    INTCONbits.GIEH = 0;
-    INTCONbits.GIEL = 0;
+    for (;;) {
+        INTCONbits.GIEH = 0;
+        INTCONbits.GIEL = 0;
 
-    while (TXB0CONbits.TXREQ == 1 && TXB1CONbits.TXREQ == 1 && TXB2CONbits.TXREQ == 1
-           && COMSTATbits.RXBP == 0 && COMSTATbits.TXBP == 0 && COMSTATbits.TXBO == 0); //TODO: przerobic zeby przy zajetych kolejkach dodal do buforu wysylania
+        if (TXB0CONbits.TXREQ != 1) {
+            TXB0EIDH = tempEIDH;
+            TXB0EIDL = tempEIDL;
+            TXB0SIDH = tempSIDH;
+            TXB0SIDL = tempSIDL;
+            TXB0DLC  = cm->dlc;
+            TXB0D0   = cm->data[0];
+            TXB0D1   = cm->data[1];
+            TXB0D2   = cm->data[2];
+            TXB0D3   = cm->data[3];
+            TXB0D4   = cm->data[4];
+            TXB0D5   = cm->data[5];
+            TXB0D6   = cm->data[6];
+            TXB0D7   = cm->data[7];
+            TXB0CONbits.TXREQ = 1;
+            break;
+        }
+        else if (TXB1CONbits.TXREQ != 1) {
+            TXB1EIDH = tempEIDH;
+            TXB1EIDL = tempEIDL;
+            TXB1SIDH = tempSIDH;
+            TXB1SIDL = tempSIDL;
+            TXB1DLC  = cm->dlc;
+            TXB1D0   = cm->data[0];
+            TXB1D1   = cm->data[1];
+            TXB1D2   = cm->data[2];
+            TXB1D3   = cm->data[3];
+            TXB1D4   = cm->data[4];
+            TXB1D5   = cm->data[5];
+            TXB1D6   = cm->data[6];
+            TXB1D7   = cm->data[7];
+            TXB1CONbits.TXREQ = 1;
+            break;
+        }
+        else if (TXB2CONbits.TXREQ != 1) {
+            TXB2EIDH = tempEIDH;
+            TXB2EIDL = tempEIDL;
+            TXB2SIDH = tempSIDH;
+            TXB2SIDL = tempSIDL;
+            TXB2DLC  = cm->dlc;
+            TXB2D0   = cm->data[0];
+            TXB2D1   = cm->data[1];
+            TXB2D2   = cm->data[2];
+            TXB2D3   = cm->data[3];
+            TXB2D4   = cm->data[4];
+            TXB2D5   = cm->data[5];
+            TXB2D6   = cm->data[6];
+            TXB2D7   = cm->data[7];
+            TXB2CONbits.TXREQ = 1;
+            break;
+        }
+        else if (COMSTATbits.RXBP == 1 || COMSTATbits.TXBP == 1 || COMSTATbits.TXBO == 1) {    //bus passive / bus off error
+            TXB2CONbits.TXREQ = 0;
+            while (TXB2CONbits.TXREQ);
 
-    if (TXB0CONbits.TXREQ != 1) {
-        TXB0EIDH = tempEIDH;
-        TXB0EIDL = tempEIDL;
-        TXB0SIDH = tempSIDH;
-        TXB0SIDL = tempSIDL;
-        TXB0DLC  = cm->dlc;
-        TXB0D0   = cm->data[0];
-        TXB0D1   = cm->data[1];
-        TXB0D2   = cm->data[2];
-        TXB0D3   = cm->data[3];
-        TXB0D4   = cm->data[4];
-        TXB0D5   = cm->data[5];
-        TXB0D6   = cm->data[6];
-        TXB0D7   = cm->data[7];
-        TXB0CONbits.TXREQ = 1;
-    }
-    else if (TXB1CONbits.TXREQ != 1) {
-        TXB1EIDH = tempEIDH;
-        TXB1EIDL = tempEIDL;
-        TXB1SIDH = tempSIDH;
-        TXB1SIDL = tempSIDL;
-        TXB1DLC  = cm->dlc;
-        TXB1D0   = cm->data[0];
-        TXB1D1   = cm->data[1];
-        TXB1D2   = cm->data[2];
-        TXB1D3   = cm->data[3];
-        TXB1D4   = cm->data[4];
-        TXB1D5   = cm->data[5];
-        TXB1D6   = cm->data[6];
-        TXB1D7   = cm->data[7];
-        TXB1CONbits.TXREQ = 1;
-    }
-    else if (TXB2CONbits.TXREQ != 1) {
-        TXB2EIDH = tempEIDH;
-        TXB2EIDL = tempEIDL;
-        TXB2SIDH = tempSIDH;
-        TXB2SIDL = tempSIDL;
-        TXB2DLC  = cm->dlc;
-        TXB2D0   = cm->data[0];
-        TXB2D1   = cm->data[1];
-        TXB2D2   = cm->data[2];
-        TXB2D3   = cm->data[3];
-        TXB2D4   = cm->data[4];
-        TXB2D5   = cm->data[5];
-        TXB2D6   = cm->data[6];
-        TXB2D7   = cm->data[7];
-        TXB2CONbits.TXREQ = 1;
-    }
-    else if (COMSTATbits.RXBP == 1 || COMSTATbits.TXBP == 1) {    //bus passive error
-        TXB2CONbits.TXREQ = 0;
-        while (TXB2CONbits.TXREQ);
+            uint8_t faultSIDH, faultSIDL, faultEIDH, faultEIDL;
+            calc_can_broadcast_id(&faultSIDH, &faultSIDL, &faultEIDH, &faultEIDL, H9FRAME_TYPE_NODE_FAULT, node_info.node_id, node_info.node_type);
 
-        uint8_t faultSIDH, faultSIDL, faultEIDH, faultEIDL;
-        calc_can_broadcast_id(&faultSIDH, &faultSIDL, &faultEIDH, &faultEIDL, H9FRAME_TYPE_NODE_FAULT, node_info.node_id, node_info.node_type);
+            TXB2EIDH = faultEIDH;
+            TXB2EIDL = faultEIDL;
+            TXB2SIDH = faultSIDH;
+            TXB2SIDL = faultSIDL;
+            TXB2DLC  = 1;
+            TXB2D0   = NODE_FAULT_CAN_FRAME_LOSS;
+            TXB2CONbits.TXREQ = 1;      // ramka czeka w TXB2 i pojedzie automatycznie po wyjściu z bus-off
 
-        TXB2EIDH = faultEIDH;
-        TXB2EIDL = faultEIDL;
-        TXB2SIDH = faultSIDH;
-        TXB2SIDL = faultSIDL;
-        TXB2DLC  = 1;
-        TXB2D0   = NODE_FAULT_CAN_FRAME_LOSS;
-        TXB2CONbits.TXREQ = 1;      // ramka czeka w TXB2 i pojedzie automatycznie po wyjściu z bus-off
+            INTCONbits.GIEH = gieh;
+            INTCONbits.GIEL = giel;
+            return 0;
+        }
 
+        // all TX buffers busy: re-enable interrupts so RX keeps being serviced while waiting
         INTCONbits.GIEH = gieh;
         INTCONbits.GIEL = giel;
-        return 0;
     }
 
     INTCONbits.GIEH = gieh;
@@ -334,6 +366,14 @@ void send_node_fault(uint8_t errno) {
 // -- -- -- | ty_(0) ty ty ty ty so so so | so so so **  1 ** so so | fl fl fl ds ds ds ds ds | ds ds ds sq sq sq sq sq
 // -- -- -- | ty_(1) ty ty ty ty so so so | so so so **  1 ** so so | nt nt nt nt nt nt nt nt | nt nt nt nt nt nt nt nt
 uint8_t CAN_get_msg(h9frame_t* cm) {
+    // RX frame lost: software buffer full or hardware RXB0/RXB1 overflow
+    if (can_rx_buf_overflow || COMSTATbits.RXB0OVFL || COMSTATbits.RXB1OVFL) {
+        can_rx_buf_overflow = 0;
+        COMSTATbits.RXB0OVFL = 0;
+        COMSTATbits.RXB1OVFL = 0;
+        send_node_fault(NODE_FAULT_CAN_FRAME_LOSS);
+    }
+
     if (can_rx_buf_top != can_rx_buf_bottom) {
         cm->type = can_rx_buf[can_rx_buf_bottom].txbSIDH >> 3;
         cm->source_id = (uint8_t)(can_rx_buf[can_rx_buf_bottom].txbSIDH << 5) | (uint8_t)(can_rx_buf[can_rx_buf_bottom].txbSIDL >> 3 & 0x1c) | (uint8_t)(can_rx_buf[can_rx_buf_bottom].txbSIDL & 0x03);
@@ -526,6 +566,11 @@ static void CAN_send_node_info_broadcast(uint8_t turn_on) {
     cm.data[6] = node_info.hardware_revision;
     cm.data[7] = node_info.reset_reason;
     CAN_put_msg(&cm);
+}
+
+static void can_set_mode(uint8_t mode) {
+    CANCON = mode;
+    while ((CANSTAT & 0xE0) != mode);
 }
 
 static uint8_t read_hardware_revision(void) {
