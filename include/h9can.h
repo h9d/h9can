@@ -20,9 +20,6 @@
 #include "h9frame.h"
 #include "h9def.h"
 
-/** Current node ID, loaded from EEPROM by CAN_init(). */
-extern volatile uint8_t can_node_id;
-
 /**
  * @brief Initialise the CAN peripheral and load the node ID from EEPROM.
  *
@@ -31,15 +28,21 @@ extern volatile uint8_t can_node_id;
  * and stores the node metadata used when responding to standard registers.
  *
  * @param node_type       Application-specific node type (16-bit, see doc/nodes.md).
- * @param hardware_rev    Hardware revision letter, e.g. @c 'a'.
+ * @param default_id      Default node id
  * @param version_major   Firmware version major number.
  * @param version_minor   Firmware version minor number.
  * @param version_patch   Firmware version patch number.
  * @param build_info      Null-terminated build-info string (e.g. git-describe output).
+ * @retval 1              Node id loaded from eeprom.
+ * @retval 0              Used default node id.
  */
-void CAN_init(uint16_t node_type, char hardware_rev,
+uint8_t CAN_init(uint16_t node_type,  uint8_t default_id,
               uint16_t version_major, uint16_t version_minor, uint16_t version_patch,
               const char *build_info);
+
+
+
+uint8_t CAN_bus_error_warning(void); 
 
 /**
  * @brief Broadcast a NODE_TURNED_ON message onto the bus.
@@ -52,30 +55,21 @@ void CAN_send_turned_on_broadcast(void);
 /**
  * @brief Configure optional receive filter 1 (hardware MOb 4).
  *
- * Enables reception of messages from a specific remote node and/or broadcast
- * messages for a specific node-type group. Pass @c active = 0 to disable the
- * corresponding filter field (accept any value).
+ * Enables reception of broadcast messages (types 16-31) sent to a specific
+ * node-type group, from any source node.
  *
- * @param remote_node_id          Source node ID to match.
- * @param remote_node_id_active   1 to apply @p remote_node_id filter, 0 to ignore.
- * @param broadcast_group         Broadcast node-type group to match.
- * @param broadcast_group_active  1 to apply @p broadcast_group filter, 0 to ignore.
+ * @param broadcast_group  Broadcast node-type group to match.
  */
-void CAN_set_msg_filter_1(uint8_t remote_node_id, uint8_t remote_node_id_active,
-                           uint16_t broadcast_group, uint8_t broadcast_group_active);
+void CAN_set_msg_filter_1(uint16_t broadcast_group);
 
 /**
  * @brief Configure optional receive filter 2 (hardware MOb 5).
  *
  * Identical semantics to CAN_set_msg_filter_1().
  *
- * @param remote_node_id          Source node ID to match.
- * @param remote_node_id_active   1 to apply @p remote_node_id filter, 0 to ignore.
- * @param broadcast_group         Broadcast node-type group to match.
- * @param broadcast_group_active  1 to apply @p broadcast_group filter, 0 to ignore.
+ * @param broadcast_group  Broadcast node-type group to match.
  */
-void CAN_set_msg_filter_2(uint8_t remote_node_id, uint8_t remote_node_id_active,
-                           uint16_t broadcast_group, uint8_t broadcast_group_active);
+void CAN_set_msg_filter_2(uint16_t broadcast_group);
 
 /**
  * @brief Attempt to transmit a message directly via MOb 0, without buffering.
@@ -98,7 +92,7 @@ uint8_t CAN_try_put_msg(h9frame_t *cm);
  * @param cm  Message to transmit.
  * @retval 1  Sent immediately.
  * @retval 2  Queued in the TX ring buffer.
- * @retval 0  TX buffer full; message dropped.
+ * @retval 0  TX buffer full or CAN bus error; message dropped.
  */
 uint8_t CAN_put_msg(h9frame_t *cm);
 
@@ -112,21 +106,6 @@ uint8_t CAN_put_msg(h9frame_t *cm);
 void send_command_error(uint8_t errno, uint8_t destination, uint8_t seqnum);
 
 void send_node_fault(uint8_t errno);
-
-/**
- * @brief Dispatch a received message — internal processing and application routing.
- *
- * Handles broadcast messages (DISCOVER, GROUP_RESET), unicast control messages
- * (NODE_RESET, NODE_UPGRADE), and register access (GET_REG, SET_REG, SET_BIT,
- * CLEAR_BIT). Standard registers (0–9) are handled internally; register numbers
- * ≥ 10 are left in @p cm for the application.
- *
- * @param cm  Received message. On return, may be overwritten if routed internally.
- * @retval 2  Message is broadcast.
- * @retval 1  Message is for the application (register ≥ 10, or REG_VALUE / COMMAND_ERROR).
- * @retval 0  Message was handled internally; application should ignore @p cm.
- */
-uint8_t process_msg(h9frame_t *cm);
 
 /**
  * @brief Receive and process the next pending CAN message (non-blocking).

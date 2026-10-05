@@ -1,0 +1,28 @@
+{
+    // Użyj funkcji IntelliSense, aby uzyskać informacje o możliwych atrybutach.
+    // Najedź kursorem, aby wyświetlić opisy istniejących atrybutów.
+    // Aby uzyskać więcej informacji, odwiedź stronę: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Uruchom h9pic-bootloader: default",
+            "type": "mplab-core-da",
+            "request": "launch",
+            "project": "h9pic-bootloader",
+            "configuration": "default",
+            "stopOnEntry": true,
+            "preLaunchTask": "h9pic-bootloader: default - Buduj",
+            "program": "${workspaceFolder}/out/h9pic-bootloader/default.elf"
+        },
+        {
+            "name": "Programuj h9pic-bootloader: default - Produkcja",
+            "type": "mplab-core-da",
+            "request": "launch",
+            "project": "h9pic-bootloader",
+            "configuration": "default",
+            "noDebug": true,
+            "preLaunchTask": "h9pic-bootloader: default - Buduj (Production)",
+            "program": "${workspaceFolder}/out/h9pic-bootloader/production/default-production.hex"
+        }
+    ]
+}

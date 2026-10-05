@@ -9,6 +9,7 @@
 #define CAN_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include "h9frame.h"
 
 #endif /* CAN_H */

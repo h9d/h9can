@@ -1,0 +1,53 @@
+cmake_minimum_required(VERSION 3.21)
+include(CMakeDependentOption)
+
+# ---------------------------------------------------------------------------
+# Configurable options – override with -D<VAR>=<value> at configure time
+# ---------------------------------------------------------------------------
+set(AVR_MCU            "atmega32m1"  CACHE STRING "Target AVR MCU (e.g. atmega64m1, atmega32c1, at90can128)")
+set(AVR_F_CPU          "12000000"    CACHE STRING "CPU frequency in Hz (e.g. 4000000, 12000000 or 16000000)")
+
+# avrdude settings
+set(AVRDUDE_PROGRAMMER "jtag3isp"    CACHE STRING "avrdude programmer (-c), e.g. jtag3isp, usbasp, stk500v2, avrispmkii")
+set(AVRDUDE_PORT       "usb"         CACHE STRING "avrdude port (-P), e.g. /dev/ttyUSB0, COM3")
+set(AVRDUDE_BAUD       "115200"      CACHE STRING "avrdude baud rate (-b)")
+set(AVRDUDE_MCU        ""            CACHE STRING "avrdude MCU name (-p); leave empty to use AVR_MCU")
+set(AVRDUDE_EXTRA_ARGS ""            CACHE STRING "Extra avrdude arguments (e.g. -v -v)")
+
+if (DEFINED ENV{H9CAN_PATH})
+    set(H9CAN_PATH $ENV{H9CAN_PATH})
+    message("H9CAN_PATH is: " ${H9CAN_PATH})
+else ()
+    set(H9CAN_PATH ${PROJECT_SOURCE_DIR}/h9can)
+    message("H9CAN_PATH not set, using local: " ${H9CAN_PATH})
+endif ()
+
+include(${H9CAN_PATH}/cmake/avr-gcc-toolchain.cmake)
+
+# ---------------------------------------------------------------------------
+# Project
+# ---------------------------------------------------------------------------
+project(PROJECT_NAME VERSION 0.0.0 LANGUAGES C ASM)
+
+message(STATUS "MCU       : ${AVR_MCU}")
+message(STATUS "F_CPU     : ${AVR_F_CPU}Hz")
+message(STATUS "Programmer: ${AVRDUDE_PROGRAMMER}  Port: ${AVRDUDE_PORT}  Baud: ${AVRDUDE_BAUD}")
+
+# ---------------------------------------------------------------------------
+# Firmware source
+# ---------------------------------------------------------------------------
+file(GLOB_RECURSE SOURCE_FILES CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/src/*.c"
+        "${CMAKE_SOURCE_DIR}/src/*.S"
+)
+
+include(${H9CAN_PATH}/cmake/avr.cmake)
+
+# ---------------------------------------------------------------------------
+# version.h generation
+# ---------------------------------------------------------------------------
+set(VERSION_H_IN  "${CMAKE_SOURCE_DIR}/src/version.h.in")
+set(VERSION_H_OUT "${CMAKE_BINARY_DIR}/src/version.h")
+
+include(${H9CAN_PATH}/cmake/git-version.cmake)
+include(${H9CAN_PATH}/cmake/avrdude-helpers.cmake)

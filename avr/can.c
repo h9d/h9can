@@ -89,6 +89,7 @@ static void send_reg_value4(uint8_t registry, uint8_t destination, uint8_t seqnu
 static void send_reg_value6(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4, uint8_t value5, uint8_t value6);
 static void CAN_send_node_info_broadcast(uint8_t turn_on);
 static void process_standard_reg(h9frame_t *cm);
+static uint8_t process_msg(h9frame_t *cm);
 
 /* ======================== PUBLIC FUNCTIONS ======================== */
 
@@ -141,7 +142,7 @@ void CAN_init(uint16_t node_type, char hardware_rev, uint16_t version_major, uin
 
     //select mob 2 for broadcast
     CANPAGE = 0x02 << MOBNB0;
-    set_CAN_broadcast_id(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, 0);
+    set_CAN_broadcast_id(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, H9FRAME_BROADCAST_ALL_GROUP);
     set_CAN_broadcast_id_mask(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, H9FRAME_NODE_TYPE_MASK);
     CANIDM4 |= 1 << IDEMSK; // set filter
     CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
@@ -162,34 +163,28 @@ void CAN_send_turned_on_broadcast(void) {
     CAN_send_node_info_broadcast(1);
 }
 
-void CAN_set_msg_filter_1(uint8_t remote_node_id, uint8_t remote_node_id_active, uint16_t broadcast_group, uint8_t broadcast_group_active) {
+void CAN_set_msg_filter_1(uint16_t broadcast_group) {
     CANPAGE = 0x04 << MOBNB0; //select mob 4
 
-    uint8_t node_id_mask = remote_node_id_active ? H9FRAME_ID_MASK : 0;
-    uint16_t node_type_mask = broadcast_group_active ? H9FRAME_NODE_TYPE_MASK : 0;
-
-    set_CAN_broadcast_id(H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, remote_node_id, broadcast_group);
-    set_CAN_broadcast_id_mask(H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP_MASK, node_id_mask, node_type_mask);
-
-    CANIDM4 |= 1 << IDEMSK; // set filter
-    CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
-
-    CANIE2 |= 1 << IEMOB3;
-}
-
-void CAN_set_msg_filter_2(uint8_t remote_node_id, uint8_t remote_node_id_active, uint16_t broadcast_group, uint8_t broadcast_group_active) {
-    CANPAGE = 0x05 << MOBNB0; //select mob 5
-
-    uint8_t node_id_mask = remote_node_id_active ? H9FRAME_ID_MASK : 0;
-    uint16_t node_type_mask = broadcast_group_active ? H9FRAME_NODE_TYPE_MASK : 0;
-
-    set_CAN_broadcast_id(H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, remote_node_id, broadcast_group);
-    set_CAN_broadcast_id_mask(H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP_MASK, node_id_mask, node_type_mask);
+    set_CAN_broadcast_id(H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, 0, broadcast_group);
+    set_CAN_broadcast_id_mask(H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, H9FRAME_NODE_TYPE_MASK);
 
     CANIDM4 |= 1 << IDEMSK; // set filter
     CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
 
     CANIE2 |= 1 << IEMOB4;
+}
+
+void CAN_set_msg_filter_2(uint16_t broadcast_group) {
+    CANPAGE = 0x05 << MOBNB0; //select mob 5
+
+    set_CAN_broadcast_id(H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, 0, broadcast_group);
+    set_CAN_broadcast_id_mask(H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, H9FRAME_NODE_TYPE_MASK);
+
+    CANIDM4 |= 1 << IDEMSK; // set filter
+    CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
+
+    CANIE2 |= 1 << IEMOB5;
 }
 
 uint8_t CAN_try_put_msg(h9frame_t *cm) {
@@ -217,6 +212,7 @@ uint8_t CAN_try_put_msg(h9frame_t *cm) {
 }
 
 uint8_t __attribute__((weak)) CAN_put_msg(h9frame_t *cm) {
+    uint8_t sreg = SREG;
     cli();
     uint8_t ret = 0;
     if (CAN_try_put_msg(cm)) {
@@ -225,6 +221,8 @@ uint8_t __attribute__((weak)) CAN_put_msg(h9frame_t *cm) {
     else {
         uint8_t tmp_idx = (uint8_t) ((can_tx_buf_top + 1) & CAN_TX_BUF_INDEX_MASK);
 
+        //TODO: rozwarzyc czy nie zwiekszyc bo przy multi frame sie ten bufor skonczy, obecnie jest 8, do 64 na chwile obecna da sie powiekszyc, moze dodac wysylanie blokujace?
+        // ale trzeba wziasc pod uwage ze nie mozna czekac z wylaczonymi przerwaniami
         if (can_tx_buf_bottom != tmp_idx) {
             calc_can_id(&can_tx_buf[can_tx_buf_top].canidt1, &can_tx_buf[can_tx_buf_top].canidt2, &can_tx_buf[can_tx_buf_top].canidt3, &can_tx_buf[can_tx_buf_top].canidt4, cm);
 
@@ -237,7 +235,7 @@ uint8_t __attribute__((weak)) CAN_put_msg(h9frame_t *cm) {
             ret = 2;
         }
     }
-    sei();
+    SREG = sreg;
     return ret;
 }
 
@@ -253,73 +251,6 @@ void send_command_error(uint8_t errno, uint8_t destination, uint8_t seqnum) {
     CAN_put_msg(&cm);
 }
 
-uint8_t process_msg(h9frame_t *cm) {
-    /* --- BROADCAST --- */
-    if (cm->type & H9FRAME_UNICAST_BROADCAST_BIT) {
-        if (cm->type == H9FRAME_TYPE_DISCOVER || cm->type == H9FRAME_TYPE_GROUP_RESET) {
-            if (cm->broadcast.group == node_info.node_type || cm->broadcast.group == H9FRAME_BROADCAST_ID) {
-                if (cm->type == H9FRAME_TYPE_DISCOVER) {
-                    CAN_send_node_info_broadcast(0);
-                    return 0;
-                }
-                else if (cm->type == H9FRAME_TYPE_GROUP_RESET) {
-                    mcu_reset();
-                    return 0;
-                }
-            }
-            else {
-                // INVALID_MSG but we don't answere on broadcast
-                return 0;
-            }
-        }
-
-        return 2;
-    }
-    /* --- UNICAST --- */
-    else {
-        if (cm->unicast.destination_id != can_node_id) {
-            return 0; //not for me
-        }
-
-        /* -- RCV BOOTLOADER MSG -- */
-        if (cm->type <= H9FRAME_TYPE_PAGE_FILL_BREAK) {
-            send_command_error(H9FRAME_ERROR_INVALID_FRAME, cm->source_id, cm->unicast.seqnum);
-            return 0;
-        }
-
-        /* -- MULTIPLE MSG -- */
-        if (cm->unicast.flags != 0 && cm->type != H9FRAME_TYPE_SET_REG && cm->type != H9FRAME_TYPE_REG_VALUE) {
-            send_command_error(H9FRAME_ERROR_INVALID_FRAME, cm->source_id, cm->unicast.seqnum);
-            return 0;
-        }
-
-        if (cm->type == H9FRAME_TYPE_NODE_RESET) {
-            mcu_reset();
-            return 0;
-        }
-        else if (cm->type == H9FRAME_TYPE_NODE_UPGRADE && cm->dlc == 0) {
-#ifdef BOOTSTART
-            cli();
-            __asm__ volatile ( "jmp " STR(BOOTSTART) );
-#else
-#warning "Node upgrade (bootloader) disable"
-            send_command_error(H9FRAME_ERROR_BOOTLOADER_UNSUPPORTED, cm->source_id, cm->unicast.seqnum);
-            return 0;
-#endif //BOOTSTART
-        }
-        else if (cm->type == H9FRAME_TYPE_SET_REG || cm->type == H9FRAME_TYPE_GET_REG || cm->type == H9FRAME_TYPE_SET_BIT || cm->type == H9FRAME_TYPE_CLEAR_BIT) {
-            /* --- STANDARD REG OPERATION -- */
-            if (cm->dlc > 0 && cm->data[0] < 10) {
-                process_standard_reg(cm);
-                return 0;
-            }
-            else {
-                return 1;
-            }
-        }
-        return 1; //THEORETICALLY H9FRAME_TYPE_COMMAND_ERROR OR H9FRAME_TYPE_REG_VALUE
-    }
-}
 // 31 30 29 | 28     27 26 25 24 23 22 21 | 20 19 18 17 16 15 14 13 | 12 11 10 09 08 07 06 05 | 04 03 02 01 00
 // -- -- -- | ty_(0) ty ty ty ty so so so | so so so so so fl fl fl | ds ds ds ds ds ds ds ds | sq sq sq sq sq
 // -- -- -- | ty_(1) ty ty ty ty so so so | so so so so so nt nt nt | nt nt nt nt nt nt nt nt | nt nt nt nt nt
@@ -328,10 +259,10 @@ uint8_t CAN_get_msg(h9frame_t *cm) {
         cm->type = can_rx_buf[can_rx_buf_bottom].canidt1 >> 3;
         cm->source_id = (can_rx_buf[can_rx_buf_bottom].canidt1 << 5) | (can_rx_buf[can_rx_buf_bottom].canidt2 >> 3);
         if (cm->type & H9FRAME_UNICAST_BROADCAST_BIT) {
-            cm->broadcast.group = (can_rx_buf[can_rx_buf_bottom].canidt2 << 13) | (can_rx_buf[can_rx_buf_bottom].canidt3 << 5) | ((can_rx_buf[can_rx_buf_bottom].canidt4 >> 3) & 0x1f);
+            cm->broadcast.group = ((uint16_t)can_rx_buf[can_rx_buf_bottom].canidt2 << 13) | ((uint16_t)can_rx_buf[can_rx_buf_bottom].canidt3 << 5) | ((can_rx_buf[can_rx_buf_bottom].canidt4 >> 3) & 0x1f);
         }
         else {
-            cm->unicast.flags = ((can_rx_buf[can_rx_buf_bottom].canidt2) & 0x03);
+            cm->unicast.flags = ((can_rx_buf[can_rx_buf_bottom].canidt2) & 0x07);
             cm->unicast.destination_id  = can_rx_buf[can_rx_buf_bottom].canidt3;
             cm->unicast.seqnum = can_rx_buf[can_rx_buf_bottom].canidt4 >> 3;
         }
@@ -460,14 +391,14 @@ void __attribute__((weak)) mcu_reset(void) {
 
 static void calc_can_unicast_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, uint8_t type, uint8_t src, uint8_t flags, uint8_t dst, uint8_t seq) {
     *id1 = (type << 3) | (src >> 5);
-    *id2 = (src << 3) | (flags & 0x03);
+    *id2 = (src << 3) | (flags & 0x07);
     *id3 = dst;
     *id4 = ((seq << 3) & 0xf8);
 }
 
 static void calc_can_broadcast_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, uint8_t type, uint8_t src, uint16_t node_type) {
     *id1 = (type << 3) | (src >> 5);
-    *id2 = (src << 3) | ((node_type >> 13) & 0x03);
+    *id2 = (src << 3) | ((node_type >> 13) & 0x07);
     *id3 = ((node_type >> 5) & 0xff);
     *id4 = ((node_type << 3) & 0xf8);
 }
@@ -528,30 +459,34 @@ static void send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum
 
     size_t value_ix = 0;
 
-    for (int msg_num = 0; value_ix < length; ++msg_num) {
+    for (uint8_t msg_num = 0; value_ix < length; ++msg_num) {
         uint8_t i = 1;
+        cm.data[0] = registry;
+
+        if (length < 8) {
+            cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
+        }
+        else if (msg_num == 0) {
+            cm.unicast.flags = H9FRAME_FLAG_MULTI_FRAME_FIRST;
+            cm.data[1] = (length + 5) / 6;
+            i++;
+        }
+        else if (value_ix + 6 < length) {
+            cm.unicast.flags = H9FRAME_FLAG_MULTI_FRAME_MIDDLE;
+            cm.data[1] = msg_num;
+            i++;
+        }
+        else {
+            cm.unicast.flags = H9FRAME_FLAG_MULTI_FRAME_LAST;
+            cm.data[1] = msg_num;
+            i++;
+        }
+
         for (; i < 8 && value_ix < length; ++i) {
             cm.data[i] = value[value_ix];
             value_ix++;
         }
         cm.dlc = i;
-
-        if (length < 8) {
-            cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
-            cm.data[0] = registry;
-        }
-        else if (msg_num == 0) {
-            cm.unicast.flags = H9FRAME_FLAG_MULTI_MSG_FIRST;
-            cm.data[0] = registry;
-        }
-        else if (value_ix < length) {
-            cm.unicast.flags = H9FRAME_FLAG_MULTI_MSG_MIDDLE;
-            cm.data[0] = msg_num;
-        }
-        else {
-            cm.unicast.flags = H9FRAME_FLAG_MULTI_MSG_LAST;
-            cm.data[0] = msg_num;
-        }
 
         CAN_put_msg(&cm);
     }
@@ -560,7 +495,7 @@ static void send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum
 static void send_reg_value1(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
     cm.unicast.destination_id = destination;
     cm.unicast.seqnum = seqnum;
 
@@ -574,7 +509,7 @@ static void send_reg_value2(uint8_t registry, uint8_t destination, uint8_t seqnu
     h9frame_t cm;
 
     cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
     cm.unicast.destination_id = destination;
     cm.unicast.seqnum = seqnum;
 
@@ -588,7 +523,7 @@ static void send_reg_value2(uint8_t registry, uint8_t destination, uint8_t seqnu
 static void send_reg_value3(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
     cm.unicast.destination_id = destination;
     cm.unicast.seqnum = seqnum;
 
@@ -603,7 +538,7 @@ static void send_reg_value3(uint8_t registry, uint8_t destination, uint8_t seqnu
 static void send_reg_value4(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
     cm.unicast.destination_id = destination;
     cm.unicast.seqnum = seqnum;
 
@@ -619,7 +554,7 @@ static void send_reg_value4(uint8_t registry, uint8_t destination, uint8_t seqnu
 static void send_reg_value6(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4, uint8_t value5, uint8_t value6) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
     cm.unicast.destination_id = destination;
     cm.unicast.seqnum = seqnum;
 
@@ -656,6 +591,10 @@ static void CAN_send_node_info_broadcast(uint8_t turn_on) {
     CAN_put_msg(&cm);
 }
 
+void __attribute__((weak)) read_power_supply_register(uint8_t destination_id, uint8_t seqnum) {
+    send_command_error(H9FRAME_ERROR_UNSUPPORTED_REGISTER, destination_id, seqnum);
+}
+
 static void process_standard_reg(h9frame_t *cm) {
     if (cm->type == H9FRAME_TYPE_SET_REG && cm->dlc > 1) {
         switch (cm->data[0]) {
@@ -672,9 +611,10 @@ static void process_standard_reg(h9frame_t *cm) {
                 return;
             case NODE_ID_STD_REGISTER:
                 if (cm->dlc == 2) {
+                    uint8_t sreg = SREG;
                     cli();
                     write_node_id(cm->data[1], node_info.node_type);
-                    sei();
+                    SREG = sreg;
 
                     send_reg_value1(NODE_ID_STD_REGISTER, cm->source_id, cm->unicast.seqnum, can_node_id);
                     return;
@@ -700,10 +640,9 @@ static void process_standard_reg(h9frame_t *cm) {
                 send_reg_value6(NODE_VERSION_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (node_info.version_major >> 8), node_info.version_major & 0xff, (node_info.version_minor >> 8) & 0xff, node_info.version_minor & 0xff, (node_info.version_patch >> 8) & 0xff, node_info.version_patch & 0xff);
                 return;
             case NODE_BUILD_INFO_STD_REGISTER: {
-                //TODO: add multi-message value with message counter on 7 byte
                 size_t len = 0;
                 for (; node_info.build_info[len] && len < (H9FRAME_MAX_REGISTER_SIZE - 1); len++);
-                send_reg_value(NODE_BUILD_INFO_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (uint8_t*)&node_info.build_info, len+1);
+                send_reg_value(NODE_BUILD_INFO_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (uint8_t*)&node_info.build_info, len);
                 return;
             }
             case NODE_MCU_TYPE_STD_REGISTER:
@@ -727,8 +666,9 @@ static void process_standard_reg(h9frame_t *cm) {
             case NODE_RESET_REASON_STD_REGISTER:
                 send_reg_value1(NODE_RESET_REASON_STD_REGISTER, cm->source_id, cm->unicast.seqnum, reset_reason);
                 return;
-            //case NODE_POWER_SUPPLY_STD_REGISTER,
-            //     return;
+            case NODE_POWER_SUPPLY_STD_REGISTER:
+                read_power_supply_register(cm->source_id, cm->unicast.seqnum);
+                return;
             //case NODE_MCU_TEMP_STD_REGISTER,
             //     return;
             case NODE_ID_STD_REGISTER:
@@ -741,4 +681,72 @@ static void process_standard_reg(h9frame_t *cm) {
     }
     //H9FRAME_TYPE_SET_BIT, H9FRAME_TYPE_CLEAR_BIT
     send_command_error(H9FRAME_ERROR_UNSUPPORTED_OPERATION, cm->source_id, cm->unicast.seqnum);
+}
+
+static uint8_t process_msg(h9frame_t *cm) {
+    /* --- BROADCAST --- */
+    if (cm->type & H9FRAME_UNICAST_BROADCAST_BIT) {
+        if (cm->type == H9FRAME_TYPE_DISCOVER || cm->type == H9FRAME_TYPE_GROUP_RESET) {
+            if (cm->broadcast.group == node_info.node_type || cm->broadcast.group == H9FRAME_BROADCAST_ALL_GROUP) {
+                if (cm->type == H9FRAME_TYPE_DISCOVER) {
+                    CAN_send_node_info_broadcast(0);
+                    return 0;
+                }
+                else if (cm->type == H9FRAME_TYPE_GROUP_RESET) {
+                    mcu_reset();
+                    return 0;
+                }
+            }
+            else {
+                // INVALID_MSG but we don't answere on broadcast
+                return 0;
+            }
+        }
+
+        return 2;
+    }
+    /* --- UNICAST --- */
+    else {
+        if (cm->unicast.destination_id != can_node_id) {
+            return 0; //not for me
+        }
+
+        /* -- RCV BOOTLOADER MSG -- */
+        if (cm->type <= H9FRAME_TYPE_PAGE_FILL_BREAK) {
+            send_command_error(H9FRAME_ERROR_INVALID_FRAME, cm->source_id, cm->unicast.seqnum);
+            return 0;
+        }
+
+        /* -- MULTIPLE MSG -- */
+        if (cm->unicast.flags != 0 && cm->type != H9FRAME_TYPE_SET_REG && cm->type != H9FRAME_TYPE_REG_VALUE) {
+            send_command_error(H9FRAME_ERROR_INVALID_FRAME, cm->source_id, cm->unicast.seqnum);
+            return 0;
+        }
+
+        if (cm->type == H9FRAME_TYPE_NODE_RESET) {
+            mcu_reset();
+            return 0;
+        }
+        else if (cm->type == H9FRAME_TYPE_NODE_UPGRADE && cm->dlc == 0) {
+#ifdef BOOTSTART
+            cli();
+            __asm__ volatile ( "jmp " STR(BOOTSTART) );
+#else
+#warning "Node upgrade (bootloader) disable"
+            send_command_error(H9FRAME_ERROR_BOOTLOADER_UNSUPPORTED, cm->source_id, cm->unicast.seqnum);
+            return 0;
+#endif //BOOTSTART
+        }
+        else if (cm->type == H9FRAME_TYPE_SET_REG || cm->type == H9FRAME_TYPE_GET_REG || cm->type == H9FRAME_TYPE_SET_BIT || cm->type == H9FRAME_TYPE_CLEAR_BIT) {
+            /* --- STANDARD REG OPERATION -- */
+            if (cm->dlc > 0 && cm->data[0] < 10) {
+                process_standard_reg(cm);
+                return 0;
+            }
+            else {
+                return 1;
+            }
+        }
+        return 1; //THEORETICALLY H9FRAME_TYPE_COMMAND_ERROR OR H9FRAME_TYPE_REG_VALUE
+    }
 }

@@ -91,7 +91,7 @@ uint8_t CAN_get_msg_blocking(h9frame_t *cm) {
 
             cm->type = canidt1 >> 3;
             cm->source_id = (canidt1 << 5) | (canidt2 >> 3);
-            cm->unicast.flags = ((canidt2) & 0x03);
+            cm->unicast.flags = ((canidt2) & 0x07);
             cm->unicast.destination_id  = canidt3;
             cm->unicast.seqnum = canidt4 >> 3;
 
@@ -108,14 +108,14 @@ uint8_t CAN_get_msg_blocking(h9frame_t *cm) {
 
 static void calc_can_unicast_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, uint8_t type, uint8_t src, uint8_t flags, uint8_t dst, uint8_t seq) {
     *id1 = (type << 3) | (src >> 5);
-    *id2 = (src << 3) | (flags & 0x03);
+    *id2 = (src << 3) | (flags & 0x07);
     *id3 = dst;
     *id4 = ((seq << 3) & 0xf8);
 }
 
 static void calc_can_broadcast_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, uint8_t type, uint8_t src, uint16_t node_type) {
     *id1 = (type << 3) | (src >> 5);
-    *id2 = (src << 3) | ((node_type >> 13) & 0x03);
+    *id2 = (src << 3) | ((node_type >> 13) & 0x07);
     *id3 = ((node_type >> 5) & 0xff);
     *id4 = ((node_type << 3) & 0xf8);
 }

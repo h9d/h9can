@@ -12,9 +12,11 @@ find_package(Git QUIET)
 set(GIT_VERSION "")
 
 if(GIT_FOUND)
-    # Try "git describe" — works when there is at least one tag reachable
+    # Try "git describe" — only version tags (v1.2.3) are considered, other tags
+    # in the repo (e.g. hardware revisions) must not end up in the firmware version.
+    # Without a reachable version tag --always falls back to the commit hash.
     execute_process(
-            COMMAND ${GIT_EXECUTABLE} describe --tags --dirty=-dirty --always
+            COMMAND ${GIT_EXECUTABLE} describe --tags --match "v[0-9]*" --dirty=-dirty --always
             WORKING_DIRECTORY "${SOURCE_DIR}"
             OUTPUT_VARIABLE GIT_VERSION
             OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -33,9 +35,11 @@ set(VERSION_PATCH ${VERSION_PATCH_BASE})
 if(NOT GIT_VERSION)
     set(GIT_VERSION "unknown")
 else()
-    # If describe returned only a commit hash (no tag reachable), prepend the base version
     string(REGEX MATCH "^v[0-9]" _has_prefix "${GIT_VERSION}")
-    if(_has_prefix)
+    if(NOT _has_prefix)
+        # Only a commit hash (no version tag reachable) — prepend the base version
+        set(GIT_VERSION "${VERSION_MAJOR_BASE}.${VERSION_MINOR_BASE}.${VERSION_PATCH_BASE}-g${GIT_VERSION}")
+    else()
         string(REGEX REPLACE "^v" "" GIT ${GIT_VERSION})
         string(REPLACE "-" ";" GIT_LIST ${GIT})
         list(GET GIT_LIST 0 VERSION_CORE)
