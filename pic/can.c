@@ -71,7 +71,7 @@ static void send_reg_value2(uint8_t registry, uint8_t destination, uint8_t seqnu
 static void send_reg_value3(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3);
 static void send_reg_value4(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4);
 static void send_reg_value6(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4, uint8_t value5, uint8_t value6);
-static void CAN_send_node_info_broadcast(uint8_t turn_on);
+static void CAN_send_node_info_broadcast(uint8_t type);
 static void process_standard_reg(h9frame_t *cm);
 static uint8_t process_msg(h9frame_t *cm);
 static void can_set_mode(uint8_t mode);
@@ -241,7 +241,7 @@ uint8_t CAN_bus_error_warning(void) {
 }
 
 void CAN_send_turned_on_broadcast(void) {
-    CAN_send_node_info_broadcast(1);
+    CAN_send_node_info_broadcast(H9FRAME_TYPE_NODE_TURNED_ON);
 }
 
 // Filter registers are writable in Configuration mode only
@@ -551,14 +551,11 @@ static void send_reg_value6(uint8_t registry, uint8_t destination, uint8_t seqnu
     CAN_put_msg(&cm);
 }
 
-static void CAN_send_node_info_broadcast(uint8_t turn_on) {
+// type: H9FRAME_TYPE_NODE_INFO or H9FRAME_TYPE_NODE_TURNED_ON
+static void CAN_send_node_info_broadcast(uint8_t type) {
     h9frame_t cm;
 
-    if (turn_on)
-        cm.type = H9FRAME_TYPE_NODE_TURNED_ON;
-    else
-        cm.type = H9FRAME_TYPE_NODE_INFO;
-    cm.broadcast.group = node_info.node_type;
+    cm.type = type;
 
     // version packed into 32 bits: major (10 bits) | minor (11 bits) | patch (11 bits), same as BOOTLOADER_TURNED_ON
     uint32_t version = ((uint32_t)(node_info.version_major & 0x3ff) << 22) | ((uint32_t)(node_info.version_minor & 0x7ff) << 11) | (node_info.version_patch & 0x7ff);
@@ -685,7 +682,7 @@ static uint8_t process_msg(h9frame_t *cm) {
         if (cm->type == H9FRAME_TYPE_DISCOVER || cm->type == H9FRAME_TYPE_GROUP_RESET) {
             if (cm->broadcast.group == node_info.node_type || cm->broadcast.group == H9FRAME_BROADCAST_ALL_GROUP) {
                 if (cm->type == H9FRAME_TYPE_DISCOVER) {
-                    CAN_send_node_info_broadcast(0);
+                    CAN_send_node_info_broadcast(H9FRAME_TYPE_NODE_INFO);
                     return 0;
                 }
                 else if (cm->type == H9FRAME_TYPE_GROUP_RESET) {
