@@ -47,8 +47,8 @@ void CAN_init(void) {
 
     // 1st msg filter
     CANPAGE = 0x01 << MOBNB0;
-    set_CAN_id(0, H9MSG_BOOTLOADER_MSG_TYPE_GROUP, 0, can_node_id, 0);
-    set_CAN_id_mask(0, H9MSG_BOOTLOADER_MSG_TYPE_GROUP_MASK, 0, H9MSG_ID_MASK, 0);
+    set_CAN_id(0, H9FRAME_BOOTLOADER_MSG_TYPE_GROUP, 0, can_node_id, 0);
+    set_CAN_id_mask(0, H9FRAME_BOOTLOADER_MSG_TYPE_GROUP_MASK, 0, H9FRAME_ID_MASK, 0);
     CANIDM4 |= 1 << IDEMSK;
     CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
 
@@ -56,12 +56,12 @@ void CAN_init(void) {
 }
 
 
-void CAN_put_msg_blocking(h9msg_t *cm) {
+void CAN_put_msg_blocking(h9frame_t *cm) {
     CANPAGE = 0 << MOBNB0;              // Select MOb0 for transmission
     while ( CANEN2 & ( 1 << ENMOB0 ) ); // Wait for MOb 0 to be free
     CANSTMOB = 0x00;                    // Clear mob status register
 
-    set_CAN_id(cm->priority, cm->type, cm->seqnum, cm->destination_id, cm->source_id);
+    set_CAN_id(cm->priority, cm->type, cm->unicast.seqnum, cm->unicast.destination_id, cm->source_id);
 
     uint8_t idx = 0;
     for (; idx < 8; ++idx)
@@ -71,7 +71,7 @@ void CAN_put_msg_blocking(h9msg_t *cm) {
 }
 
 
-uint8_t CAN_get_msg_blocking(h9msg_t *cm) {
+uint8_t CAN_get_msg_blocking(h9frame_t *cm) {
     uint32_t timeout_counter = 0x1fffff;
 
     while (timeout_counter) {
@@ -90,8 +90,8 @@ uint8_t CAN_get_msg_blocking(h9msg_t *cm) {
 
             cm->priority = (canidt1 >> 7) & 0x01;
             cm->type = (canidt1 >> 2) & 0x1f;
-            cm->seqnum = ((canidt1 << 3) & 0x18) | ((canidt2 >> 5) & 0x07);
-            cm->destination_id = ((canidt2 << 4) & 0x1f0) | ((canidt3 >> 4) & 0x0f);
+            cm->unicast.seqnum = ((canidt1 << 3) & 0x18) | ((canidt2 >> 5) & 0x07);
+            cm->unicast.destination_id = ((canidt2 << 4) & 0x1f0) | ((canidt3 >> 4) & 0x0f);
             cm->source_id = ((canidt3 << 5) & 0x1e0) | ((canidt4 >> 3) & 0x1f);
 
             cm->dlc = cancdmob & 0x0f;
@@ -108,8 +108,8 @@ uint8_t CAN_get_msg_blocking(h9msg_t *cm) {
 
 void read_node_id(void) {
     can_node_id = eeprom_read_word(&ee_node_id);
-    // if (node_id > 0 && node_id < H9MSG_BROADCAST_ID) {
-    //     can_node_id = node_id & ((1<<H9MSG_ID_BIT_LENGTH)-1);
+    // if (node_id > 0 && node_id < H9FRAME_BROADCAST_ID) {
+    //     can_node_id = node_id & ((1<<H9FRAME_ID_BIT_LENGTH)-1);
     // }
     // else {
     //     can_node_id = 0;

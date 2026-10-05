@@ -5,6 +5,8 @@
 *.pid
 *.out
 
+Testing
+
 # CMake
 .cmake/
 cmake-build-debug*

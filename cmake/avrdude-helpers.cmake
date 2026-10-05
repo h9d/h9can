@@ -1,13 +1,14 @@
 # ---------------------------------------------------------------------------
-# avrdude helpers
+# avrdude helpers — flash, eeprom, fuse, combined targets
 # ---------------------------------------------------------------------------
-find_program(AVRDUDE avrdude)
+find_program(AVRDUDE  avrdude)
+find_program(SREC_CAT srec_cat)
 
-if(AVRDUDE_MCU STREQUAL "")
+if (AVRDUDE_MCU STREQUAL "")
     set(AVRDUDE_MCU ${AVR_MCU})
 endif()
 
-if(AVRDUDE)
+if (AVRDUDE)
     set(_AVRDUDE_BASE
             ${AVRDUDE}
             -p ${AVRDUDE_MCU}
@@ -29,23 +30,25 @@ if(AVRDUDE)
         set(FUSE -U lfuse:w:0xde:m -U hfuse:w:0xdd:m -U efuse:w:0xfd:m)
     endif ()
 
+    set(_APP_HEX $<TARGET_FILE_DIR:${PROJECT_NAME}>/$<TARGET_FILE_BASE_NAME:${PROJECT_NAME}>.hex)
+    set(_APP_EEP $<TARGET_FILE_DIR:${PROJECT_NAME}>/$<TARGET_FILE_BASE_NAME:${PROJECT_NAME}>.eep)
+
     # Flash program memory (application only)
     add_custom_target(flash
-            COMMAND ${_AVRDUDE_BASE} -U flash:w:${PROJECT_NAME}.hex:i
+            COMMAND ${_AVRDUDE_BASE} -U flash:w:${_APP_HEX}:i
             DEPENDS ${PROJECT_NAME}
             COMMENT "Flashing ${PROJECT_NAME}.hex to ${AVR_MCU} via ${AVRDUDE_PROGRAMMER} on ${AVRDUDE_PORT}"
     )
 
     # Write EEPROM
     add_custom_target(flash-eeprom
-            COMMAND ${_AVRDUDE_BASE} -U eeprom:w:${PROJECT_NAME}.eep:i
+            COMMAND ${_AVRDUDE_BASE} -U eeprom:w:${_APP_EEP}:i
             DEPENDS ${PROJECT_NAME}
             COMMENT "Writing EEPROM to ${AVR_MCU}"
     )
 
     add_custom_target(fuse
             COMMAND ${_AVRDUDE_BASE} ${FUSE}
-            DEPENDS ${PROJECT_NAME}
             COMMENT "Writing fuses to ${AVR_MCU}"
     )
 
@@ -60,38 +63,41 @@ if(AVRDUDE)
 
     # Verify flash after programming
     add_custom_target(verify
-            COMMAND ${_AVRDUDE_BASE} -U flash:v:${PROJECT_NAME}.hex:i
+            COMMAND ${_AVRDUDE_BASE} -U flash:v:${_APP_HEX}:i
             DEPENDS ${PROJECT_NAME}
             COMMENT "Verifying flash on ${AVR_MCU}"
     )
 
     # -----------------------------------------------------------------------
-    # flash-all  – program bootloader (chip erase) then application (no erase)
-    # flash-combined – merge with srec_cat and program in a single pass
+    # flash-all  – erase + write bootloader, then write app without erasing.
+    # flash-combined – merge with srec_cat and program in a single pass.
+    # Both targets depend on FREQ_IN_M being set by avr.cmake before this file
+    # is included.
     # -----------------------------------------------------------------------
-    if(BUILD_BOOTLOADER)
-        # Two-pass: erase+write bootloader, then write app without erasing.
-        # -D on the second pass preserves the bootloader section.
-        add_custom_target(flash-all
-                COMMAND ${_AVRDUDE_BASE} -U flash:w:$<TARGET_FILE_DIR:h9can_bootloader_${AVR_MCU}_${FREQ_IN_M}M>/$<TARGET_FILE_BASE_NAME:h9can_bootloader_${AVR_MCU}_${FREQ_IN_M}M>.hex:i
-                COMMAND ${_AVRDUDE_BASE} -D -U flash:w:${CMAKE_BINARY_DIR}/${PROJECT_NAME}.hex:i
-                DEPENDS ${PROJECT_NAME} h9can_bootloader_${AVR_MCU}_${FREQ_IN_M}M
-                COMMENT "Programming ${AVR_MCU}: bootloader + application"
-        )
+    set(_BL_TARGET h9can_bootloader_${AVR_MCU}_${FREQ_IN_M}M)
+    set(_BL_HEX $<TARGET_FILE_DIR:${_BL_TARGET}>/$<TARGET_FILE_BASE_NAME:${_BL_TARGET}>.hex)
 
-        # Single-pass via srec_cat (merge both hex files before flashing)
-        find_program(SREC_CAT srec_cat)
-        if(SREC_CAT)
-            add_custom_target(flash-combined
-                    COMMAND ${SREC_CAT}
-                            $<TARGET_FILE_DIR:h9can_bootloader_${AVR_MCU}_${FREQ_IN_M}M>/$<TARGET_FILE_BASE_NAME:h9can_bootloader_${AVR_MCU}_${FREQ_IN_M}M>.hex -Intel
-                            ${CMAKE_BINARY_DIR}/${PROJECT_NAME}.hex -Intel
-                            -o ${CMAKE_BINARY_DIR}/combined.hex -Intel
-                    COMMAND ${_AVRDUDE_BASE} -U flash:w:${CMAKE_BINARY_DIR}/combined.hex:i
-                    DEPENDS ${PROJECT_NAME} h9can_bootloader_${AVR_MCU}_${FREQ_IN_M}M
-                    COMMENT "Single-pass flash of combined bootloader and app image to ${AVR_MCU}"
-            )
-        endif()
+    # Two-pass: erase+write bootloader, then write app without erasing
+    add_custom_target(flash-all
+            COMMAND ${_AVRDUDE_BASE} -U flash:w:${_BL_HEX}:i
+            COMMAND ${_AVRDUDE_BASE} -D -U flash:w:${_APP_HEX}:i
+            DEPENDS ${PROJECT_NAME} ${_BL_TARGET}
+            COMMENT "Programming ${AVR_MCU}: bootloader + application (two-pass)"
+    )
+
+    if (SREC_CAT)
+        set(_COMBINED_HEX $<TARGET_FILE_DIR:${PROJECT_NAME}>/combined.hex)
+        add_custom_target(flash-combined
+                COMMAND ${SREC_CAT}
+                        ${_BL_HEX}  -Intel
+                        ${_APP_HEX} -Intel
+                        -o ${_COMBINED_HEX} -Intel
+                COMMAND ${_AVRDUDE_BASE} -U flash:w:${_COMBINED_HEX}:i
+                DEPENDS ${PROJECT_NAME} ${_BL_TARGET}
+                COMMENT "Single-pass flash of combined bootloader+app image to ${AVR_MCU}"
+        )
+    else()
+        message(STATUS "srec_cat not found – flash-combined target not available")
     endif()
 
 else()

@@ -40,8 +40,8 @@ target_link_options(${PROJECT_NAME} PRIVATE
 add_custom_command(
         TARGET ${PROJECT_NAME}
         POST_BUILD
-        COMMAND ${AVR_OBJCOPY} -O ihex -R .eeprom $<TARGET_FILE:${PROJECT_NAME}> $<TARGET_FILE_DIR:${PROJECT_NAME}>/$<TARGET_FILE_BASE_NAME:${PROJECT_NAME}>.hex
-        COMMAND ${AVR_OBJCOPY} -O binary -R .eeprom $<TARGET_FILE:${PROJECT_NAME}> $<TARGET_FILE_DIR:${PROJECT_NAME}>/$<TARGET_FILE_BASE_NAME:${PROJECT_NAME}>.hex
+        COMMAND ${AVR_OBJCOPY} -O ihex   -R .eeprom $<TARGET_FILE:${PROJECT_NAME}> $<TARGET_FILE_DIR:${PROJECT_NAME}>/$<TARGET_FILE_BASE_NAME:${PROJECT_NAME}>.hex
+        COMMAND ${AVR_OBJCOPY} -O binary -R .eeprom $<TARGET_FILE:${PROJECT_NAME}> $<TARGET_FILE_DIR:${PROJECT_NAME}>/$<TARGET_FILE_BASE_NAME:${PROJECT_NAME}>.bin
         COMMAND ${AVR_OBJCOPY} -O ihex -j .eeprom --set-section-flags=.eeprom="alloc,load" --change-section-lma .eeprom=0 --no-change-warnings $<TARGET_FILE:${PROJECT_NAME}> $<TARGET_FILE_DIR:${PROJECT_NAME}>/$<TARGET_FILE_BASE_NAME:${PROJECT_NAME}>.eep
         COMMAND ${AVR_OBJDUMP} -P mem-usage $<TARGET_FILE:${PROJECT_NAME}>
         COMMENT "Building ${PROJECT_NAME}.hex / .bin / .eep"
@@ -59,11 +59,6 @@ target_sources(${PROJECT_NAME} PRIVATE $<TARGET_OBJECTS:h9can_${AVR_MCU}_${FREQ_
 # ---------------------------------------------------------------------------
 add_dependencies(${PROJECT_NAME} h9can_bootloader_${AVR_MCU}_${FREQ_IN_M}M)
 
-#add_custom_target(${PROJECT_NAME}_with_bl
-#        COMMAND ${SREC_CAT} ${HEX_FILE} -I $<TARGET_FILE_DIR:h9can_bootloader_${AVR_MCU}_${FREQ_IN_M}M>/$<TARGET_FILE_BASE_NAME:h9can_bootloader_${AVR_MCU}_${FREQ_IN_M}M>.hex -I -o ${HEX_WITH_BL_FILE} -I
-#        DEPENDS ${PROJECT_NAME} h9can_bootloader_${AVR_MCU}_${FREQ_IN_M}M
-#        COMMENT "Flashs combinating"
-#)
 
 # ---------------------------------------------------------------------------
 # Disassembly listing
