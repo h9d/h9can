@@ -112,13 +112,12 @@ void test_bootloader_type_msg(void) {
     TEST_ASSERT_EQUAL_UINT8(0, process_msg(&in));
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                  g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_COMMAND_ERROR,            g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                          g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                         g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(21,                                  g_sent[0].unicast.seqnum);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_ERROR_INVALID_MSG,           g_sent[0].data[0]);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_ERROR_INVALID_FRAME,           g_sent[0].data[0]);
     TEST_ASSERT_EQUAL_INT(1,                                   g_sent[0].dlc);
 }
 
@@ -175,9 +174,7 @@ void test_broadcast_group_discover(void) {
     TEST_ASSERT_EQUAL_UINT8(0, process_msg(&in));
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                     g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_NODE_INFO,                   g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                   g_sent[0].flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                             g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(MY_NODE_TYPE,                           g_sent[0].broadcast.group);
 
@@ -190,7 +187,7 @@ void test_broadcast_group_discover(void) {
     TEST_ASSERT_EQUAL_INT(MY_VERSION_MINOR & 0xff,                g_sent[0].data[5]);
 
     TEST_ASSERT_EQUAL_INT(MY_HARDWARE_REV,                        g_sent[0].data[6]);
-    TEST_ASSERT_GREATER_OR_EQUAL_INT8(NODE_RESET_BY_UNKNOW,       g_sent[0].data[7]);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT8(NODE_RESET_BY_UNKNOWN,       g_sent[0].data[7]);
     TEST_ASSERT_LESS_OR_EQUAL_INT8(NODE_RESET_BY_EXTERNAL_SOURCE, g_sent[0].data[7]);
 
     TEST_ASSERT_EQUAL_INT(8,                                      g_sent[0].dlc);
@@ -206,9 +203,7 @@ void test_broadcast_group_all_discover(void) {
     TEST_ASSERT_EQUAL_UINT8(0, process_msg(&in));
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                     g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_NODE_INFO,                   g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                   g_sent[0].flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                             g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(MY_NODE_TYPE,                           g_sent[0].broadcast.group);
 
@@ -221,7 +216,7 @@ void test_broadcast_group_all_discover(void) {
     TEST_ASSERT_EQUAL_INT(MY_VERSION_MINOR & 0xff,                g_sent[0].data[5]);
 
     TEST_ASSERT_EQUAL_INT(MY_HARDWARE_REV,                        g_sent[0].data[6]);
-    TEST_ASSERT_GREATER_OR_EQUAL_INT8(NODE_RESET_BY_UNKNOW,       g_sent[0].data[7]);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT8(NODE_RESET_BY_UNKNOWN,       g_sent[0].data[7]);
     TEST_ASSERT_LESS_OR_EQUAL_INT8(NODE_RESET_BY_EXTERNAL_SOURCE, g_sent[0].data[7]);
 
     TEST_ASSERT_EQUAL_INT(8,                                      g_sent[0].dlc);
@@ -256,7 +251,7 @@ void test_set_bit_on_readonly(void) {
     h9frame_t in;
     memset(&in, 0, sizeof(in));
     in.type                   = H9FRAME_TYPE_SET_BIT;
-    in.flags                  = H9FRAME_FLAG_SINGE_MSG;
+    in.unicast.flags                  = H9FRAME_FLAG_SINGE_MSG;
     in.source_id              = TEST_SRC_ID;
     in.unicast.destination_id = MY_NODE_ID;
     in.unicast.seqnum         = 21;
@@ -268,9 +263,8 @@ void test_set_bit_on_readonly(void) {
     TEST_ASSERT_EQUAL_UINT8(0, process_msg(&in));
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                  g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_COMMAND_ERROR,            g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                          g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                         g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(21,                                  g_sent[0].unicast.seqnum);
@@ -282,7 +276,7 @@ void test_set_bit_on_writable(void) {
     h9frame_t in;
     memset(&in, 0, sizeof(in));
     in.type                   = H9FRAME_TYPE_SET_BIT;
-    in.flags                  = H9FRAME_FLAG_SINGE_MSG;
+    in.unicast.flags                  = H9FRAME_FLAG_SINGE_MSG;
     in.source_id              = TEST_SRC_ID;
     in.unicast.destination_id = MY_NODE_ID;
     in.unicast.seqnum         = 21;
@@ -294,9 +288,8 @@ void test_set_bit_on_writable(void) {
     TEST_ASSERT_EQUAL_UINT8(0, process_msg(&in));
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                  g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_COMMAND_ERROR,            g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                          g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                         g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(21,                                  g_sent[0].unicast.seqnum);
@@ -315,9 +308,8 @@ void test_std_reg_node_type_read(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_REG_VALUE,              g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                        g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                       g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                 g_sent[0].unicast.seqnum);
@@ -335,9 +327,8 @@ void test_std_reg_node_type_write(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_COMMAND_ERROR,          g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                        g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                       g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(seq,                               g_sent[0].unicast.seqnum);
@@ -352,9 +343,8 @@ void test_std_reg_node_hardware_revision_read(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                  g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_REG_VALUE,                g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                          g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                         g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                   g_sent[0].unicast.seqnum);
@@ -370,9 +360,8 @@ void test_std_reg_node_hardware_revision_write(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_COMMAND_ERROR,          g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                        g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                       g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                 g_sent[0].unicast.seqnum);
@@ -387,9 +376,8 @@ void test_std_reg_node_versio_read(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_REG_VALUE,              g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                        g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                       g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                 g_sent[0].unicast.seqnum);
@@ -408,9 +396,8 @@ void test_std_reg_node_versio_write(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_COMMAND_ERROR,          g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                        g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                       g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                 g_sent[0].unicast.seqnum);
@@ -431,9 +418,8 @@ void test_std_reg_build_info_read(void) {
 
     TEST_ASSERT_EQUAL_INT(msg_count, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                    g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_REG_VALUE,                  g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_MULTI_MSG_FIRST,            g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_MULTI_MSG_FIRST,            g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                            g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                           g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(seq,                                   g_sent[0].unicast.seqnum);
@@ -451,9 +437,8 @@ void test_std_reg_build_info_read(void) {
 
     int msg_num = 1;
     for (; msg_num < msg_count - 1; msg_num++) {
-        TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                     g_sent[msg_num].priority);
         TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_REG_VALUE,                   g_sent[msg_num].type);
-        TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_MULTI_MSG_MIDDLE,            g_sent[msg_num].flags);
+        TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_MULTI_MSG_MIDDLE,            g_sent[msg_num].unicast.flags);
         TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                             g_sent[msg_num].source_id);
         TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                            g_sent[msg_num].unicast.destination_id);
         TEST_ASSERT_EQUAL_INT(seq,                                    g_sent[msg_num].unicast.seqnum);
@@ -471,9 +456,8 @@ void test_std_reg_build_info_read(void) {
         }
     }
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                         g_sent[msg_count - 1].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_REG_VALUE,                       g_sent[msg_count - 1].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_MULTI_MSG_LAST,                  g_sent[msg_count - 1].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_MULTI_MSG_LAST,                  g_sent[msg_count - 1].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                                 g_sent[msg_count - 1].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                                g_sent[msg_count - 1].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(seq,                                        g_sent[msg_count - 1].unicast.seqnum);
@@ -500,9 +484,8 @@ void test_std_reg_build_info_write(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_COMMAND_ERROR,          g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                        g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                       g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(0,                                 g_sent[0].unicast.seqnum);
@@ -517,9 +500,8 @@ void test_std_reg_mcu_type_read(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                  g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_REG_VALUE,                g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                          g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                         g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                   g_sent[0].unicast.seqnum);
@@ -536,9 +518,8 @@ void test_std_reg_mcu_type_write(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_COMMAND_ERROR,          g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                        g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                       g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                 g_sent[0].unicast.seqnum);
@@ -553,9 +534,8 @@ void test_std_reg_node_sn_read(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                      g_sent[0].priority);
     TEST_ASSERT_TRUE(g_sent[0].type == H9FRAME_TYPE_REG_VALUE || g_sent[0].type == H9FRAME_TYPE_COMMAND_ERROR);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                    g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                    g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                              g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                             g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                       g_sent[0].unicast.seqnum);
@@ -579,9 +559,8 @@ void test_std_reg_node_sn_write(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_COMMAND_ERROR,          g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                        g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                       g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                 g_sent[0].unicast.seqnum);
@@ -596,28 +575,26 @@ void test_std_reg_reset_reason_read(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                     g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_REG_VALUE,                   g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                   g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                   g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                             g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                            g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                      g_sent[0].unicast.seqnum);
     TEST_ASSERT_EQUAL_INT(NODE_RESET_REASON_STD_REGISTER,         g_sent[0].data[0]);
-    TEST_ASSERT_GREATER_OR_EQUAL_INT8(NODE_RESET_BY_UNKNOW,       g_sent[0].data[1]);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT8(NODE_RESET_BY_UNKNOWN,       g_sent[0].data[1]);
     TEST_ASSERT_LESS_OR_EQUAL_INT8(NODE_RESET_BY_EXTERNAL_SOURCE, g_sent[0].data[1]);
     TEST_ASSERT_EQUAL_INT(2,                                      g_sent[0].dlc);
 }
 
 void test_std_reg_reset_reason_write(void) {
-    uint8_t tmp = NODE_RESET_BY_UNKNOW;
+    uint8_t tmp = NODE_RESET_BY_UNKNOWN;
     h9frame_t in = make_set_reg(NODE_RESET_REASON_STD_REGISTER, &tmp, 1, 7);
     TEST_ASSERT_EQUAL_UINT8(0, process_msg(&in));
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_COMMAND_ERROR,          g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                        g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                       g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                 g_sent[0].unicast.seqnum);
@@ -632,9 +609,8 @@ void test_std_reg_power_supply_read(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                     g_sent[0].priority);
     TEST_ASSERT_TRUE(g_sent[0].type == H9FRAME_TYPE_REG_VALUE || g_sent[0].type == H9FRAME_TYPE_COMMAND_ERROR);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                   g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                   g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                             g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                            g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                      g_sent[0].unicast.seqnum);
@@ -658,9 +634,8 @@ void test_std_reg_power_supply_write(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_COMMAND_ERROR,          g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                        g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                       g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                 g_sent[0].unicast.seqnum);
@@ -675,9 +650,8 @@ void test_std_reg_mcu_temp_read(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                     g_sent[0].priority);
     TEST_ASSERT_TRUE(g_sent[0].type == H9FRAME_TYPE_REG_VALUE || g_sent[0].type == H9FRAME_TYPE_COMMAND_ERROR);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                   g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                   g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                             g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                            g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                      g_sent[0].unicast.seqnum);
@@ -701,9 +675,8 @@ void test_std_reg_mcu_temp_write(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_COMMAND_ERROR,          g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                        g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                       g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                 g_sent[0].unicast.seqnum);
@@ -718,9 +691,8 @@ void test_std_reg_node_id_read(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_REG_VALUE,              g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                        g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                       g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(7,                                 g_sent[0].unicast.seqnum);
@@ -737,9 +709,8 @@ void test_std_reg_node_id_write(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_REG_VALUE,              g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,              g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                        g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                       g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(0,                                 g_sent[0].unicast.seqnum);
@@ -756,9 +727,8 @@ void test_std_reg_node_id_oversize_write(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_send_count);
 
-    TEST_ASSERT_EQUAL_INT(H9FRAME_PRIORITY_LOW,                   g_sent[0].priority);
     TEST_ASSERT_EQUAL_INT(H9FRAME_TYPE_COMMAND_ERROR,             g_sent[0].type);
-    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                 g_sent[0].flags);
+    TEST_ASSERT_EQUAL_INT(H9FRAME_FLAG_SINGE_MSG,                 g_sent[0].unicast.flags);
     TEST_ASSERT_EQUAL_INT(MY_NODE_ID,                           g_sent[0].source_id);
     TEST_ASSERT_EQUAL_INT(TEST_SRC_ID,                          g_sent[0].unicast.destination_id);
     TEST_ASSERT_EQUAL_INT(0,                                    g_sent[0].unicast.seqnum);

@@ -29,8 +29,8 @@ void write_page(uint16_t page, uint16_t dst_id) {
 
         h9frame_t cm_res;
 
-        cm_res.priority = H9FRAME_PRIORITY_HIGH;
         cm_res.source_id = can_node_id;
+        cm_res.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
         cm_res.unicast.destination_id = dst_id;
         cm_res.unicast.seqnum = cm.unicast.seqnum;
 
@@ -107,39 +107,41 @@ int main(void) {
     h9frame_t turn_on_msg;
 
     turn_on_msg.type = H9FRAME_TYPE_BOOTLOADER_TURNED_ON;
-    turn_on_msg.priority = H9FRAME_PRIORITY_HIGH;
     turn_on_msg.source_id = can_node_id;
-    turn_on_msg.unicast.destination_id = ((1 << H9FRAME_ID_BIT_LENGTH) - 1);
-    turn_on_msg.unicast.seqnum = seqnum++;
-//    turn_on_msg.dlc = 5;
-    turn_on_msg.dlc = 4;
-    turn_on_msg.data[0] = BOOTLOADER_VERSION_MAJOR;
-    turn_on_msg.data[1] = BOOTLOADER_VERSION_MINOR;
+    turn_on_msg.broadcast.group = can_node_type;
+    turn_on_msg.dlc = 8;
+
+	turn_on_msg.data[0] = (can_node_type >> 8) & 0xff;
+    turn_on_msg.data[1] = (can_node_type) & 0xff;
+
+    turn_on_msg.data[2] = (BOOTLOADER_VERSION_MAJOR >> 8) & 0xff;
+    turn_on_msg.data[3] = (BOOTLOADER_VERSION_MAJOR) & 0xff;
+    turn_on_msg.data[4] = (BOOTLOADER_VERSION_MINOR >> 8);
+    turn_on_msg.data[5] = BOOTLOADER_VERSION_MINOR & 0xff;
 #if defined (__AVR_ATmega16M1__)
-    turn_on_msg.data[2] = NODE_MCU_ATMEGA16M1;
+    turn_on_msg.data[6] = NODE_MCU_ATMEGA16M1;
 #elif defined (__AVR_ATmega32M1__)
-    turn_on_msg.data[2] = NODE_MCU_ATMEGA32M1;
+    turn_on_msg.data[6] = NODE_MCU_ATMEGA32M1;
 #elif defined (__AVR_ATmega64M1__)
-    turn_on_msg.data[2] = NODE_MCU_ATMEGA64M1;
+    turn_on_msg.data[6] = NODE_MCU_ATMEGA64M1;
 #elif defined (__AVR_AT90CAN128__)
-    turn_on_msg.data[2] = NODE_MCU_AT90CAN128;
+    turn_on_msg.data[6] = NODE_MCU_AT90CAN128;
 #elif defined (__AVR_ATmega32C1__)
-    turn_on_msg.data[2] = NODE_MCU_ATMEGA32C1;
+    turn_on_msg.data[6] = NODE_MCU_ATMEGA32C1;
 #else
 #error "Unsupported MCU"
 #endif
 
 #if F_CPU == 4000000UL
-    turn_on_msg.data[3] = NODE_MCU_F_4MHz;
+    turn_on_msg.data[7] = NODE_MCU_F_4MHz;
 #elif F_CPU == 12000000UL
-    turn_on_msg.data[3] = NODE_MCU_F_12MHz;
+    turn_on_msg.data[7] = NODE_MCU_F_12MHz;
 #elif F_CPU == 16000000UL
-    turn_on_msg.data[3] = NODE_MCU_F_16MHz;
+    turn_on_msg.data[7] = NODE_MCU_F_16MHz;
 #else
 #error "Please specify F_CPU"
 #endif
-//    turn_on_msg.data[3] = (NODE_TYPE >> 8) & 0xff;
-//    turn_on_msg.data[4] = (NODE_TYPE) & 0xff;
+
     CAN_put_msg_blocking(&turn_on_msg);
     
     while (1) {
@@ -150,8 +152,8 @@ int main(void) {
 
                 h9frame_t cm_res;
                 cm_res.type = H9FRAME_TYPE_PAGE_FILL_NEXT;
-                cm_res.priority = H9FRAME_PRIORITY_HIGH;
                 cm_res.source_id = can_node_id;
+                cm_res.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
                 cm_res.unicast.destination_id = cm.source_id;
                 cm_res.unicast.seqnum = seqnum++;
                 cm_res.dlc = 2;

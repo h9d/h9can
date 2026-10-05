@@ -14,8 +14,8 @@
 
 #include "../include/h9frame.h"
 
-extern uint16_t ee_node_id EEMEM;
-extern volatile uint16_t can_node_id;
+extern uint8_t can_node_id;
+extern uint16_t can_node_type;
 
 void CAN_init(void);
 

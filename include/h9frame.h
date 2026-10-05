@@ -11,15 +11,11 @@
 
 #include <stdint.h>
 
-#define H9FRAME_PRIORITY_BIT_LENGTH 1
 #define H9FRAME_TYPE_BIT_LENGTH 5
-#define H9FRAME_FLAGS_BITS_LENGTH  2
+#define H9FRAME_FLAGS_BITS_LENGTH  3
 #define H9FRAME_SEQNUM_BIT_LENGTH 5
 #define H9FRAME_ID_BIT_LENGTH 8
-#define H9FRAME_BROADCAST_GROUP_LENGTH (H9FRAME_ID_BIT_LENGTH + H9FRAME_SEQNUM_BIT_LENGTH)
-
-#define H9FRAME_PRIORITY_HIGH 0
-#define H9FRAME_PRIORITY_LOW 1
+#define H9FRAME_BROADCAST_GROUP_LENGTH (H9FRAME_FLAGS_BITS_LENGTH + H9FRAME_ID_BIT_LENGTH + H9FRAME_SEQNUM_BIT_LENGTH)
 
 #define H9FRAME_FLAG_SINGE_MSG 0
 #define H9FRAME_FLAG_MULTI_MSG_FIRST 1
@@ -41,10 +37,10 @@
 #define H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP_MASK 30
 
 #define H9FRAME_ID_MASK ((1 << H9FRAME_ID_BIT_LENGTH) - 1)
-#define H9FRAME_NODE_TYPE_MASK ((1 << H9FRAME_BROADCAST_GROUP_LENGTH) - 1)
+#define H9FRAME_NODE_TYPE_MASK ((1UL << H9FRAME_BROADCAST_GROUP_LENGTH) - 1UL)
 
 #define H9FRAME_UNICAST_BROADCAST_BIT 16
-#define H9FRAME_BROADCAST_ID ((1 << H9FRAME_BROADCAST_GROUP_LENGTH) - 1)
+#define H9FRAME_BROADCAST_ID ((1UL << H9FRAME_BROADCAST_GROUP_LENGTH) - 1UL)
 
 #define H9FRAME_NODE_RESPONSE_MSG_GROUP 16
 #define H9FRAME_NODE_RESPONSE_MSG_GROUP_MASK 24
@@ -53,67 +49,70 @@
 #define H9FRAME_NODE_ALL_REMOTE_MSG_GROUP 16
 #define H9FRAME_NODE_ALL_REMOTE_MSG_GROUP_MASK 16
 
-/* --- UNICAST --- */
-#define H9FRAME_TYPE_RES1 0
-#define H9FRAME_TYPE_PAGE_START 1
-#define H9FRAME_TYPE_QUIT_BOOTLOADER 2
-#define H9FRAME_TYPE_PAGE_FILL 3
-#define H9FRAME_TYPE_BOOTLOADER_TURNED_ON 4
-#define H9FRAME_TYPE_PAGE_FILL_NEXT 5
-#define H9FRAME_TYPE_PAGE_WRITED 6
-#define H9FRAME_TYPE_PAGE_FILL_BREAK 7
+enum {
+    /* --- UNICAST --- */
+    H9FRAME_TYPE_RES1 = 0,
+    H9FRAME_TYPE_PAGE_START = 1,
+    H9FRAME_TYPE_QUIT_BOOTLOADER = 2,
+    H9FRAME_TYPE_PAGE_FILL = 3,
+    H9FRAME_TYPE_RES2 = 4,
+    H9FRAME_TYPE_PAGE_FILL_NEXT = 5,
+    H9FRAME_TYPE_PAGE_WRITED = 6,
+    H9FRAME_TYPE_PAGE_FILL_BREAK = 7,
 
-#define H9FRAME_TYPE_COMMAND_ERROR 8
-#define H9FRAME_TYPE_REG_VALUE 9
-#define H9FRAME_TYPE_SET_REG 10
-#define H9FRAME_TYPE_GET_REG 11
-#define H9FRAME_TYPE_SET_BIT 12
-#define H9FRAME_TYPE_CLEAR_BIT 13
-#define H9FRAME_TYPE_NODE_UPGRADE 14
-#define H9FRAME_TYPE_NODE_RESET 15
+    H9FRAME_TYPE_COMMAND_ERROR =  8,
+    H9FRAME_TYPE_REG_VALUE =  9,
+    H9FRAME_TYPE_SET_REG =  10,
+    H9FRAME_TYPE_GET_REG =  11,
+    H9FRAME_TYPE_SET_BIT =  12,
+    H9FRAME_TYPE_CLEAR_BIT =  13,
+    H9FRAME_TYPE_NODE_UPGRADE =  14,
+    H9FRAME_TYPE_NODE_RESET =  15,
 
-/* --- SPECIAL BROADCAST --- */
-#define H9FRAME_TYPE_DISCOVER 16
-#define H9FRAME_TYPE_GROUP_RESET 17
+    /* --- SPECIAL BROADCAST --- */
+    H9FRAME_TYPE_DISCOVER = 16,
+    H9FRAME_TYPE_GROUP_RESET = 17,
 
-/* --- BROADCAST --- */
-#define H9FRAME_TYPE_NODE_FAULT 18
-#define H9FRAME_TYPE_REG_VALUE_BROADCAST 19
-#define H9FRAME_TYPE_NODE_HEARTBEAT 20
-#define H9FRAME_TYPE_NODE_INFO 21
-#define H9FRAME_TYPE_NODE_TURNED_ON 22
-#define H9FRAME_TYPE_RES2 23
+    /* --- BROADCAST --- */
+    H9FRAME_TYPE_NODE_FAULT = 18,
+    H9FRAME_TYPE_REG_VALUE_BROADCAST = 19,
+    H9FRAME_TYPE_NODE_HEARTBEAT = 20,
+    H9FRAME_TYPE_NODE_INFO = 21,
+    H9FRAME_TYPE_NODE_TURNED_ON = 22,
+    H9FRAME_TYPE_BOOTLOADER_TURNED_ON = 23,
 
-#define H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST0 24
-#define H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST1 25
-#define H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST2 26
-#define H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST3 27
-#define H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST4 28
-#define H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST5 29
-#define H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST6 30
-#define H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST7 31
+    H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST0 = 24,
+    H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST1 = 25,
+    H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST2 = 26,
+    H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST3 = 27,
+    H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST4 = 28,
+    H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST5 = 29,
+    H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST6 = 30,
+    H9FRAME_TYPE_NODE_SPECIFIC_BROADCAST7 = 31
+};
 
+//          | CANIDT1                     | CANIDT2                 | CANIDT3                 | CANIDT4
+// 31 30 29 | 28     27 26 25 24 23 22 21 | 20 19 18 17 16 15 14 13 | 12 11 10 09 08 07 06 05 | 04 03 02 01 00 -- -- --
+// -- -- -- | ty_(0) ty ty ty ty so so so | so so so so so fl fl fl | ds ds ds ds ds ds ds ds | sq sq sq sq sq -- -- --
+// -- -- -- | ty_(1) ty ty ty ty so so so | so so so so so nt nt nt | nt nt nt nt nt nt nt nt | nt nt nt nt nt -- -- --
 
-// 31 30 29 | 28 27     26 25 24 23 22 21 | 20 19 18 17 16 15 14 13 | 12 11 10 09 08 07 06 05 | 04 03 02 01 00
-// -- -- -- | pp ty_(0) ty ty ty ty fl fl | so so so so so so so so | ds ds ds ds ds ds ds ds | sq sq sq sq sq
-// -- -- -- | pp ty_(1) ty ty ty ty fl fl | so so so so so so so so | nt nt nt nt nt nt nt nt | nt nt nt nt nt
-
+//          | SIDH                        | SIDL                    | EIDH                    | EIDL
+// 31 30 29 | 28     27 26 25 24 23 22 21 | 20 19 18 ** ** ** 17 16 | 15 14 13 12 11 10 09 08 | 07 06 05 04 03 02 01 00
+// -- -- -- | ty_(0) ty ty ty ty so so so | so so so **  1 ** so so | fl fl fl ds ds ds ds ds | ds ds ds sq sq sq sq sq
+// -- -- -- | ty_(1) ty ty ty ty so so so | so so so **  1 ** so so | nt nt nt nt nt nt nt nt | nt nt nt nt nt nt nt nt
 struct h9frame {
-    uint8_t priority: H9FRAME_PRIORITY_BIT_LENGTH;
     uint8_t type: H9FRAME_TYPE_BIT_LENGTH;
-    uint8_t flags: H9FRAME_FLAGS_BITS_LENGTH;
     uint8_t source_id: H9FRAME_ID_BIT_LENGTH;
 
     union {
         struct {
-            uint8_t : (16 - H9FRAME_ID_BIT_LENGTH - H9FRAME_SEQNUM_BIT_LENGTH);
-            uint8_t destination_id : H9FRAME_ID_BIT_LENGTH;
-            uint8_t seqnum         : H9FRAME_SEQNUM_BIT_LENGTH;
+            unsigned int seqnum : H9FRAME_SEQNUM_BIT_LENGTH;
+            unsigned int destination_id : H9FRAME_ID_BIT_LENGTH;
+            unsigned int flags : H9FRAME_FLAGS_BITS_LENGTH;
         } unicast;
 
         struct {
-            uint8_t : (16 - H9FRAME_BROADCAST_GROUP_LENGTH);
-            uint16_t group : H9FRAME_BROADCAST_GROUP_LENGTH;
+            uint16_t group;
         } broadcast;
     };
 
@@ -122,11 +121,7 @@ struct h9frame {
 };
 
 _Static_assert(
-    H9FRAME_ID_BIT_LENGTH + H9FRAME_SEQNUM_BIT_LENGTH == H9FRAME_BROADCAST_GROUP_LENGTH, "Route field size mismatch"
-);
-
-_Static_assert(
-    H9FRAME_PRIORITY_BIT_LENGTH + H9FRAME_TYPE_BIT_LENGTH + H9FRAME_FLAGS_BITS_LENGTH + H9FRAME_ID_BIT_LENGTH + H9FRAME_BROADCAST_GROUP_LENGTH == 29, "CAN id must be 29-bits"
+    H9FRAME_TYPE_BIT_LENGTH + H9FRAME_ID_BIT_LENGTH + H9FRAME_FLAGS_BITS_LENGTH + H9FRAME_ID_BIT_LENGTH + H9FRAME_SEQNUM_BIT_LENGTH == 29, "CAN id must be 29-bits"
 );
 
 typedef struct h9frame h9frame_t;

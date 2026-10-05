@@ -46,7 +46,7 @@ add_custom_target(generate_bootloader_version ALL
 # ---------------------------------------------------------------------------
 # Build all MCU × frequency variants
 # ---------------------------------------------------------------------------
-set(SOURCE_FILES bootloader.c can.c can.h ../include/h9def.h ../include/h9msg.h)
+set(SOURCE_FILES bootloader.c can.c can.h ../include/h9def.h ../include/h9frame.h)
 
 foreach (mmcu IN LISTS avr_mmcus)
     foreach (freq IN LISTS avr_freqs)
