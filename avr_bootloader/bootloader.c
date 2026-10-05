@@ -115,8 +115,6 @@ int main(void) {
     MCUCR |= (1<<IVCE);
     MCUCR |= (1<<IVSEL);
     cli();
-    PORTC = (PORTC & 0x0C) | (0xaa & 0xF3);
-    PORTD = (PORTD & 0xFC) | ((0xaa>>2) & 0x03);
 
     CAN_init();
     
