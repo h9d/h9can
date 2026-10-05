@@ -30,7 +30,18 @@ static struct {
     uint16_t version_minor;
     uint16_t version_patch;
     char build_info[H9FRAME_MAX_REGISTER_SIZE];
-    uint8_t reset_reason;
+    volatile union {                        // NODE_FLAG_* in h9def.h, register 0, NODE_INFO data[6..7]
+        struct {
+            unsigned reset_reason : 3;      //0-2
+            unsigned bl_present : 1;        //3
+            unsigned bl_mismatch : 1;       //4
+            unsigned default_id : 1;        //5
+            unsigned can_error_warning : 1; //6, sticky
+            unsigned can_tx_frame_loss : 1; //7, sticky
+            unsigned can_rx_frame_loss : 1; //8, sticky
+        };
+        uint16_t raw;
+    } flags;
 } node_info;
 
 
@@ -47,6 +58,8 @@ can_buf_t can_rx_buf[CAN_RX_BUF_SIZE];
 volatile uint8_t can_rx_buf_top = 0;
 volatile uint8_t can_rx_buf_bottom = 0;
 static volatile uint8_t can_rx_buf_overflow = 0;
+
+#define BOOTLOADER_ADDR 0xF600      // pic_bootloader code offset
 
 void (*read_power_supply_register)(uint8_t, uint8_t) = NULL;
 
@@ -129,17 +142,17 @@ uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint8_t pcb_rev, uint8_
 //        STKPTRbits.STKUNF = 0;
 //    }
     if (!RCONbits.POR && !RCONbits.BOR) {
-        node_info.reset_reason = NODE_RESET_BY_POWER_ON;    // POR=0, BOR=0 → power-on
+        node_info.flags.reset_reason = NODE_RESET_BY_POWER_ON;    // POR=0, BOR=0 → power-on
     } else if (RCONbits.TO == 0) {
-        node_info.reset_reason = NODE_RESET_BY_WATCHDOG;    // TO=0 → WDT timeout
+        node_info.flags.reset_reason = NODE_RESET_BY_WATCHDOG;    // TO=0 → WDT timeout
     } else if (!RCONbits.BOR) {
-        node_info.reset_reason = NODE_RESET_BY_BROWN_OUT;   // BOR=0 → brown-out
+        node_info.flags.reset_reason = NODE_RESET_BY_BROWN_OUT;   // BOR=0 → brown-out
     } else if (!RCONbits.RI) {
-        node_info.reset_reason = NODE_RESET_BY_SOFTWARE;    // RI=0 → RESET instr.
+        node_info.flags.reset_reason = NODE_RESET_BY_SOFTWARE;    // RI=0 → RESET instr.
     //} else if (!RCONbits.RMCLR) {
-    //    node_info.reset_reason = NODE_RESET_BY_EXTERNAL_SOURCE; // MCLR pin
+    //    node_info.flags.reset_reason = NODE_RESET_BY_EXTERNAL_SOURCE; // MCLR pin
     } else {
-        node_info.reset_reason = NODE_RESET_BY_UNKNOWN;
+        node_info.flags.reset_reason = NODE_RESET_BY_UNKNOWN;
     }
         
     //reset przyczyny resetu:D
@@ -160,6 +173,15 @@ uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint8_t pcb_rev, uint8_
         node_info.node_id = default_id;
         ret = 0;
     }
+
+    node_info.flags.default_id = !ret;
+    // bootloader present if its first instruction is programmed (erased flash reads 0xFF);
+    // the PIC bootloader has no info block, so NODE_FLAG_BL_MISMATCH is not reported
+    TBLPTRU = (uint8_t)((uint32_t)BOOTLOADER_ADDR >> 16);
+    TBLPTRH = (uint8_t)(BOOTLOADER_ADDR >> 8);
+    TBLPTRL = (uint8_t)BOOTLOADER_ADDR;
+    asm("TBLRD*");
+    node_info.flags.bl_present = TABLAT != 0xff;
     TRISBbits.TRISB2 = 1; //CANTX ax output
     TRISBbits.TRISB3 = 1; //CANRX ax input
     
@@ -323,6 +345,7 @@ uint8_t CAN_put_msg(h9frame_t *cm) {
             TXB2DLC  = 1;
             TXB2D0   = NODE_FAULT_CAN_FRAME_LOSS;
             TXB2CONbits.TXREQ = 1;      // ramka czeka w TXB2 i pojedzie automatycznie po wyjściu z bus-off
+            node_info.flags.can_tx_frame_loss = 1;  // interrupts disabled here
 
             INTCONbits.GIEH = gieh;
             INTCONbits.GIEL = giel;
@@ -366,9 +389,20 @@ void send_node_fault(uint8_t errno) {
 // -- -- -- | ty_(0) ty ty ty ty so so so | so so so **  1 ** so so | fl fl fl ds ds ds ds ds | ds ds ds sq sq sq sq sq
 // -- -- -- | ty_(1) ty ty ty ty so so so | so so so **  1 ** so so | nt nt nt nt nt nt nt nt | nt nt nt nt nt nt nt nt
 uint8_t CAN_get_msg(h9frame_t* cm) {
+    if (CAN_bus_error_warning()) {
+        uint8_t gieh = INTCONbits.GIEH;     // flags are also set from interrupts, keep the read-modify-write atomic
+        INTCONbits.GIEH = 0;
+        node_info.flags.can_error_warning = 1;
+        INTCONbits.GIEH = gieh;
+    }
+
     // RX frame lost: software buffer full or hardware RXB0/RXB1 overflow
     if (can_rx_buf_overflow || COMSTATbits.RXB0OVFL || COMSTATbits.RXB1OVFL) {
         can_rx_buf_overflow = 0;
+        uint8_t gieh = INTCONbits.GIEH;
+        INTCONbits.GIEH = 0;
+        node_info.flags.can_rx_frame_loss = 1;
+        INTCONbits.GIEH = gieh;
         COMSTATbits.RXB0OVFL = 0;
         COMSTATbits.RXB1OVFL = 0;
         send_node_fault(NODE_FAULT_CAN_RX_FRAME_LOSS);
@@ -524,18 +558,21 @@ static void CAN_send_node_info_broadcast(uint8_t turn_on) {
         cm.type = H9FRAME_TYPE_NODE_TURNED_ON;
     else
         cm.type = H9FRAME_TYPE_NODE_INFO;
-    cm.source_id = node_info.node_id;
     cm.broadcast.group = node_info.node_type;
 
+    // version packed into 32 bits: major (10 bits) | minor (11 bits) | patch (11 bits), same as BOOTLOADER_TURNED_ON
+    uint32_t version = ((uint32_t)(node_info.version_major & 0x3ff) << 22) | ((uint32_t)(node_info.version_minor & 0x7ff) << 11) | (node_info.version_patch & 0x7ff);
+    uint16_t flags = node_info.flags.raw;
+
     cm.dlc = 8;
-    cm.data[0] = (node_info.node_type >> 8) & 0xff;
-    cm.data[1] = (node_info.node_type) & 0xff;
-    cm.data[2] = (node_info.version_major >> 8);
-    cm.data[3] = node_info.version_major & 0xff;
-    cm.data[4] = (node_info.version_minor >> 8) & 0xff;
-    cm.data[5] = node_info.version_minor & 0xff;
-    cm.data[6] = node_info.pcb_revision;
-    cm.data[7] = node_info.reset_reason;
+    cm.data[0] = (uint8_t)(version >> 24);
+    cm.data[1] = (uint8_t)(version >> 16);
+    cm.data[2] = (uint8_t)(version >> 8);
+    cm.data[3] = (uint8_t)version;
+    cm.data[4] = node_info.pcb_revision;
+    cm.data[5] = node_info.bom_revision;
+    cm.data[6] = (uint8_t)(flags >> 8);
+    cm.data[7] = (uint8_t)flags;
     CAN_put_msg(&cm);
 }
 
@@ -564,13 +601,13 @@ static uint32_t read_serial_numer(void) {
 static void process_standard_reg(h9frame_t *cm) {
     if (cm->type == H9FRAME_TYPE_SET_REG && cm->dlc > 1) {
         switch (cm->data[0]) {
+            case NODE_FLAGS_STD_REGISTER:
             case NODE_TYPE_STD_REGISTER:
             case NODE_HARDWARE_REVISION_STD_REGISTER:
             case NODE_VERSION_STD_REGISTER:
             case NODE_BUILD_INFO_STD_REGISTER:
             case NODE_MCU_TYPE_STD_REGISTER:
             case NODE_SN_STD_REGISTER:
-            case NODE_RESET_REASON_STD_REGISTER:
             case NODE_POWER_SUPPLY_STD_REGISTER:
             //case NODE_MCU_TEMP_STD_REGISTER,
                 send_command_error(H9FRAME_ERROR_READ_ONLY_REGISTER, cm->source_id, cm->unicast.seqnum);
@@ -592,6 +629,11 @@ static void process_standard_reg(h9frame_t *cm) {
     }
     else if (cm->type == H9FRAME_TYPE_GET_REG && cm->dlc == 1) {
         switch (cm->data[0]) {
+            case NODE_FLAGS_STD_REGISTER: {
+                uint16_t flags = node_info.flags.raw;
+                send_reg_value2(NODE_FLAGS_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (uint8_t)(flags >> 8), (uint8_t)flags);
+                return;
+            }
             case NODE_TYPE_STD_REGISTER:
                 send_reg_value2(NODE_TYPE_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (node_info.node_type >> 8) & 0xff, (node_info.node_type) & 0xff);
                 return;
@@ -615,9 +657,6 @@ static void process_standard_reg(h9frame_t *cm) {
                 send_reg_value4(NODE_SN_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (uint8_t)(sn >> 24), (uint8_t)(sn >> 16), (uint8_t)(sn >> 8), (uint8_t)(sn));
                 return;
             }
-            case NODE_RESET_REASON_STD_REGISTER:
-                send_reg_value1(NODE_RESET_REASON_STD_REGISTER, cm->source_id, cm->unicast.seqnum, node_info.reset_reason);
-                return;
             case NODE_POWER_SUPPLY_STD_REGISTER:
                 if (read_power_supply_register) {
                     read_power_supply_register(cm->source_id, cm->unicast.seqnum);
@@ -688,7 +727,7 @@ static uint8_t process_msg(h9frame_t *cm) {
             INTCONbits.PEIE = 0;
             INTCONbits.GIE = 0;
             STKPTR = 0x00;
-            asm ("goto 0xf600");
+            asm ("goto " ___mkstr(BOOTLOADER_ADDR));
             return 0;
         }
         else if (cm->type == H9FRAME_TYPE_SET_REG || cm->type == H9FRAME_TYPE_GET_REG || cm->type == H9FRAME_TYPE_SET_BIT || cm->type == H9FRAME_TYPE_CLEAR_BIT) {

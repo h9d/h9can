@@ -20,79 +20,121 @@ On error the node replies with `COMMAND_ERROR` (0x08): `data[0]` = error code.
 
 | # | Constant                         | Access | Size    | Description                     |
 |---|----------------------------------|--------|---------|---------------------------------|
-| 0 | `NODE_TYPE_STD_REGISTER`         | R      | 2 bytes | Node type                       |
-| 1 | `NODE_HARDWARE_REVISION_STD_REGISTER` | R | 2 bytes | PCB revision letter, BOM revision |
-| 2 | `NODE_VERSION_STD_REGISTER`      | R      | 4 bytes | Firmware version (major, minor) |
-| 3 | `NODE_BUILD_INFO_STD_REGISTER`   | R      | ≤7 bytes| Build info string               |
-| 4 | `NODE_MCU_TYPE_STD_REGISTER`     | R      | 1 byte  | MCU type enum                   |
-| 5 | `NODE_SN_STD_REGISTER`           | R      | 10 bytes (AVR) / 4 bytes (PIC) | Serial number |
-| 6 | `NODE_RESET_REASON_STD_REGISTER` | R      | 1 byte  | Reason for last reset           |
+| 0 | `NODE_FLAGS_STD_REGISTER`        | R      | 2 bytes | Node flags (reset reason, bootloader, CAN state) |
+| 1 | `NODE_TYPE_STD_REGISTER`         | R      | 2 bytes | Node type                       |
+| 2 | `NODE_HARDWARE_REVISION_STD_REGISTER` | R | 2 bytes | PCB revision letter, BOM revision |
+| 3 | `NODE_VERSION_STD_REGISTER`      | R      | 6 bytes | Firmware version (major, minor, patch) |
+| 4 | `NODE_BUILD_INFO_STD_REGISTER`   | R      | ≤31 bytes | Build info string             |
+| 5 | `NODE_MCU_TYPE_STD_REGISTER`     | R      | 1 byte  | MCU type enum                   |
+| 6 | `NODE_SN_STD_REGISTER`           | R      | 10 bytes (AVR) / 4 bytes (PIC) | Serial number |
 | 7 | `NODE_POWER_SUPPLY_STD_REGISTER` | —      | —       | Not implemented                 |
 | 8 | `NODE_MCU_TEMP_STD_REGISTER`     | —      | —       | Not implemented                 |
 | 9 | `NODE_ID_STD_REGISTER`           | R/W    | 2 bytes | Node ID (9-bit)                 |
 
 ---
 
-### Register 0 — NODE_TYPE
+### Register 0 — NODE_FLAGS
+
+Read-only. 16-bit node flags, big-endian. The same value is sent in `data[6..7]`
+of `NODE_INFO` and `NODE_TURNED_ON`.
+
+```
+GET_REG   data: [0x00]
+REG_VALUE data: [0x00, flags_hi, flags_lo]
+```
+
+| Bits | Constant                       | Meaning |
+|------|--------------------------------|---------|
+| 0–2  | `NODE_FLAG_RESET_REASON_MASK`  | Reason for the last reset, `NODE_RESET_BY_*` (see below) |
+| 3    | `NODE_FLAG_BL_PRESENT`         | Bootloader present |
+| 4    | `NODE_FLAG_BL_MISMATCH`        | Bootloader built for another node type / PCB / BOM revision |
+| 5    | `NODE_FLAG_DEFAULT_ID`         | No node ID in EEPROM, the default ID passed to `CAN_init()` is used |
+| 6    | `NODE_FLAG_CAN_ERROR_WARNING`  | CAN error warning / error passive / bus off occurred since start |
+| 7    | `NODE_FLAG_CAN_TX_FRAME_LOSS`  | A frame could not be sent since start (TX queue full while bus passive / bus off) |
+| 8    | `NODE_FLAG_CAN_RX_FRAME_LOSS`  | A received frame was dropped since start (receive buffer overflow) |
+| 9–15 | —                              | Reserved (0) |
+
+Bits 0–5 are set at start in `CAN_init()`; bits 6–8 are sticky and set at runtime.
+
+Bootloader detection:
+- **AVR** — the bootloader info block at the end of flash (`h9avr/bl_info.h`):
+  bit 3 is set when the block is valid, bit 4 when its node type / PCB / BOM revision
+  differ from the values passed to `CAN_init()`. A bootloader without the block
+  (older version) is reported as not present.
+- **PIC** — bit 3 is set when the bootloader area (0xF600) is programmed. Bit 4 is
+  not reported (the PIC bootloader has no info block).
+
+Reset reason (bits 0–2):
+
+| Value | Constant                        | Meaning                    |
+|-------|---------------------------------|----------------------------|
+| 0     | `NODE_RESET_BY_UNKNOWN`         | Unknown / unclassified     |
+| 1     | `NODE_RESET_BY_POWER_ON`        | Power-on                   |
+| 2     | `NODE_RESET_BY_WATCHDOG`        | Watchdog timeout (AVR: also `NODE_RESET` over CAN) |
+| 3     | `NODE_RESET_BY_BROWN_OUT`       | Brown-out                  |
+| 4     | `NODE_RESET_BY_EXTERNAL_SOURCE` | External reset pin (AVR)   |
+| 5     | `NODE_RESET_BY_SOFTWARE`        | RESET instruction (PIC, also `NODE_RESET` over CAN) |
+
+---
+
+### Register 1 — NODE_TYPE
 
 Read-only. Returns the 16-bit node type passed to `CAN_init()`.
 
 ```
-GET_REG  data: [0x00]
-REG_VALUE data: [0x00, type_hi, type_lo]
+GET_REG  data: [0x01]
+REG_VALUE data: [0x01, type_hi, type_lo]
 ```
 
 Known node types are listed in `doc/nodes.md`.
 
 ---
 
-### Register 1 — NODE_HARDWARE_REVISION
+### Register 2 — NODE_HARDWARE_REVISION
 
 Read-only. Returns the PCB revision as an ASCII letter (`'A'`, `'B'`, …)
 followed by the BOM revision (uint8). Both are passed to `CAN_init()`.
 
 ```
-GET_REG   data: [0x01]
-REG_VALUE data: [0x01, pcb, bom]  e.g. [0x01, 0x42, 0x01] for PCB 'B', BOM 1
+GET_REG   data: [0x02]
+REG_VALUE data: [0x02, pcb, bom]  e.g. [0x02, 0x42, 0x01] for PCB 'B', BOM 1
 ```
 
 ---
 
-### Register 2 — NODE_VERSION
+### Register 3 — NODE_VERSION
 
-Read-only. Returns the firmware version as two 16-bit values (major, minor),
+Read-only. Returns the firmware version as three 16-bit values (major, minor, patch),
 each in big-endian byte order.
 
 ```
-GET_REG   data: [0x02]
-REG_VALUE data: [0x02, major_hi, major_lo, minor_hi, minor_lo]
-```
-
-Example: version 1.3 → `[0x02, 0x00, 0x01, 0x00, 0x03]`
-
----
-
-### Register 3 — NODE_BUILD_INFO
-
-Read-only. Returns a build information string (e.g. git-describe output) as raw
-bytes. The current implementation sends up to 7 bytes per frame (one CAN frame).
-Full multi-frame transfer is not yet implemented (TODO in source).
-
-```
 GET_REG   data: [0x03]
-REG_VALUE data: [0x03, b0, b1, b2, b3, b4, b5, b6]   (up to 7 bytes of string)
+REG_VALUE data: [0x03, major_hi, major_lo, minor_hi, minor_lo, patch_hi, patch_lo]
 ```
+
+Example: version 1.3.2 → `[0x03, 0x00, 0x01, 0x00, 0x03, 0x00, 0x02]`
 
 ---
 
-### Register 4 — NODE_MCU_TYPE
+### Register 4 — NODE_BUILD_INFO
 
-Read-only. Returns a 1-byte enum identifying the MCU. Determined at compile time
-from the `__AVR_*__` predefined macro.
+Read-only. Returns the build information string (e.g. git-describe output) as raw
+bytes, up to 31 bytes; longer than 7 bytes is sent as a multi-frame `REG_VALUE`.
 
 ```
 GET_REG   data: [0x04]
-REG_VALUE data: [0x04, mcu_type]
+REG_VALUE data: [0x04, b0, b1, ...]
+```
+
+---
+
+### Register 5 — NODE_MCU_TYPE
+
+Read-only. Returns a 1-byte enum identifying the MCU, determined at compile time.
+
+```
+GET_REG   data: [0x05]
+REG_VALUE data: [0x05, mcu_type]
 ```
 
 | Value | Constant              | MCU            |
@@ -108,7 +150,7 @@ REG_VALUE data: [0x04, mcu_type]
 
 ---
 
-### Register 5 — NODE_SN
+### Register 6 — NODE_SN
 
 Read-only. Unique hardware serial number; the size depends on the MCU:
 
@@ -116,34 +158,14 @@ Read-only. Unique hardware serial number; the size depends on the MCU:
   signature row (addresses 0x000E–0x0017: lot number, wafer number and die X/Y
   coordinates). Not documented for the M1/C1 family, the same block is documented
   as the serial number for ATmega328PB. Sent as a multi-frame `REG_VALUE`.
+  Not available on AT90CAN128 (returns `H9FRAME_ERROR_UNSUPPORTED_REGISTER`).
 - **PIC (PIC18F46K80)** — 4 bytes from User ID memory (0x200001–0x200004), written
   when programming the device (see `doc/SN.md`).
 
 ```
-GET_REG   data: [0x05]
-REG_VALUE data: [0x05, sn0, sn1, ...]
-```
-
----
-
-### Register 6 — NODE_RESET_REASON
-
-Read-only. Returns the reason the node last reset. The value is captured before
-the watchdog is disabled in the early `.init3` startup code, and preserved across
-resets in a `.noinit` RAM variable.
-
-```
 GET_REG   data: [0x06]
-REG_VALUE data: [0x06, reason]
+REG_VALUE data: [0x06, sn0, sn1, ...]
 ```
-
-| Value | Constant                       | Meaning                    |
-|-------|--------------------------------|----------------------------|
-| 0     | `NODE_RESET_BY_UNKNOW`         | Unknown / unclassified     |
-| 1     | `NODE_RESET_BY_POWER_ON`       | Power-on (POR + BOR set)   |
-| 2     | `NODE_RESET_BY_WATCHDOG`       | Watchdog timeout           |
-| 3     | `NODE_RESET_BY_BROWN_OUT`      | Brown-out                  |
-| 4     | `NODE_RESET_BY_EXTERNAL_SOURCE`| External reset pin         |
 
 ---
 

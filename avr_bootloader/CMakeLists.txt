@@ -82,7 +82,11 @@ endif ()
 # ---------------------------------------------------------------------------
 set(SOURCE_FILES bootloader.c can.c can.h ../include/h9def.h ../include/h9frame.h)
 
+# bootloader info block (h9avr/bl_info.h) at the end of flash: FLASHEND + 1 - H9_BL_INFO_SIZE
+set(H9_BL_INFO_SIZE 10)
+
 foreach (mmcu IN LISTS avr_mmcus)
+    math(EXPR _BLINFO_ADDR "${flashend_${mmcu}} + 1 - ${H9_BL_INFO_SIZE}" OUTPUT_FORMAT HEXADECIMAL)
     foreach (freq IN LISTS avr_freqs)
         set(TARGET h9can_bootloader_${mmcu}_${freq})
 
@@ -106,6 +110,7 @@ foreach (mmcu IN LISTS avr_mmcus)
         target_link_options(${TARGET} PRIVATE
                 -mmcu=${mmcu}
                 -Wl,--entry=main,--section-start=.text=${bootstart_${mmcu}},-lc,--gc-section,-Map=$<TARGET_FILE_DIR:${TARGET}>/$<TARGET_FILE_BASE_NAME:${TARGET}>.map
+                -Wl,--section-start=.blinfo=${_BLINFO_ADDR},--undefined=bl_info     # keep the block, place it at the end of flash
                 -Wall
                 )
 

@@ -17,6 +17,7 @@
 
 #include "h9avr/can.h"
 #include "h9avr/node_id.h"
+#include "h9avr/bl_info.h"
 
 #include <errno.h>
 
@@ -62,6 +63,18 @@ static struct {
     uint16_t version_minor;
     uint16_t version_patch;
     char build_info[H9FRAME_MAX_REGISTER_SIZE];
+    volatile union {                        // NODE_FLAG_* in h9def.h, register 0, NODE_INFO data[6..7]
+        struct {
+            unsigned reset_reason : 3;      //0-2
+            unsigned bl_present : 1;        //3
+            unsigned bl_mismatch : 1;       //4
+            unsigned default_id : 1;        //5
+            unsigned can_error_warning : 1; //6, sticky
+            unsigned can_tx_frame_loss : 1; //7, sticky
+            unsigned can_rx_frame_loss : 1; //8, sticky
+        };
+        uint16_t raw;
+    } flags;
 } node_info;
 
 /* --- Forward declarations --- */
@@ -108,6 +121,16 @@ uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint8_t pcb_rev, uint8_
     if (can_node_id == 0) {    // no valid id in EEPROM
         can_node_id = default_id;
         ret = 0;
+    }
+
+    node_info.flags.raw = 0;
+    node_info.flags.reset_reason = reset_reason;
+    node_info.flags.default_id = !ret;
+
+    h9_bl_info_t bl;
+    if (read_bl_info(&bl)) {
+        node_info.flags.bl_present = 1;
+        node_info.flags.bl_mismatch = bl.node_type != node_type || bl.pcb_rev != pcb_rev || bl.bom_rev != bom_rev;
     }
 
     CANGCON = ( 1 << SWRES );   // Software reset
@@ -260,6 +283,7 @@ uint8_t __attribute__((weak)) CAN_put_msg(h9frame_t *cm) {
 
             can_tx_buf[last_idx].data[0] = NODE_FAULT_CAN_FRAME_LOSS;
             can_tx_buf[last_idx].cancdmob = 1;
+            node_info.flags.can_tx_frame_loss = 1;  // interrupts disabled here
         }
     }
     SREG = sreg;
@@ -291,9 +315,20 @@ void send_node_fault(uint8_t errno) {
 // -- -- -- | ty_(0) ty ty ty ty so so so | so so so so so fl fl fl | ds ds ds ds ds ds ds ds | sq sq sq sq sq
 // -- -- -- | ty_(1) ty ty ty ty so so so | so so so so so nt nt nt | nt nt nt nt nt nt nt nt | nt nt nt nt nt
 uint8_t CAN_get_msg(h9frame_t *cm) {
+    if (CAN_bus_error_warning()) {
+        uint8_t sreg = SREG;    // flags are also set from interrupts (CAN_put_msg), keep the read-modify-write atomic
+        cli();
+        node_info.flags.can_error_warning = 1;
+        SREG = sreg;
+    }
+
     // RX frame lost: software buffer full
     if (can_rx_buf_overflow) {
         can_rx_buf_overflow = 0;
+        uint8_t sreg = SREG;
+        cli();
+        node_info.flags.can_rx_frame_loss = 1;
+        SREG = sreg;
         send_node_fault(NODE_FAULT_CAN_RX_FRAME_LOSS);
     }
 
@@ -543,18 +578,21 @@ static void CAN_send_node_info_broadcast(uint8_t turn_on) {
         cm.type = H9FRAME_TYPE_NODE_TURNED_ON;
     else
         cm.type = H9FRAME_TYPE_NODE_INFO;
-    cm.source_id = can_node_id;
     cm.broadcast.group = node_info.node_type;
 
+    // version packed into 32 bits: major (10 bits) | minor (11 bits) | patch (11 bits), same as BOOTLOADER_TURNED_ON
+    uint32_t version = ((uint32_t)(node_info.version_major & 0x3ff) << 22) | ((uint32_t)(node_info.version_minor & 0x7ff) << 11) | (node_info.version_patch & 0x7ff);
+    uint16_t flags = node_info.flags.raw;
+
     cm.dlc = 8;
-    cm.data[0] = (node_info.node_type >> 8) & 0xff;
-    cm.data[1] = (node_info.node_type) & 0xff;
-    cm.data[2] = (node_info.version_major >> 8);
-    cm.data[3] = node_info.version_major & 0xff;
-    cm.data[4] = (node_info.version_minor >> 8) & 0xff;
-    cm.data[5] = node_info.version_minor & 0xff;
-    cm.data[6] = node_info.pcb_revision;
-    cm.data[7] = reset_reason;
+    cm.data[0] = (version >> 24) & 0xff;
+    cm.data[1] = (version >> 16) & 0xff;
+    cm.data[2] = (version >> 8) & 0xff;
+    cm.data[3] = version & 0xff;
+    cm.data[4] = node_info.pcb_revision;
+    cm.data[5] = node_info.bom_revision;
+    cm.data[6] = (flags >> 8) & 0xff;
+    cm.data[7] = flags & 0xff;
     CAN_put_msg(&cm);
 }
 
@@ -569,13 +607,13 @@ void __attribute__((weak)) read_mcu_temp_register(uint8_t destination_id, uint8_
 static void process_standard_reg(h9frame_t *cm) {
     if (cm->type == H9FRAME_TYPE_SET_REG && cm->dlc > 1) {
         switch (cm->data[0]) {
+            case NODE_FLAGS_STD_REGISTER:
             case NODE_TYPE_STD_REGISTER:
             case NODE_HARDWARE_REVISION_STD_REGISTER:
             case NODE_VERSION_STD_REGISTER:
             case NODE_BUILD_INFO_STD_REGISTER:
             case NODE_MCU_TYPE_STD_REGISTER:
             case NODE_SN_STD_REGISTER:
-            case NODE_RESET_REASON_STD_REGISTER:
             case NODE_POWER_SUPPLY_STD_REGISTER:
             case NODE_MCU_TEMP_STD_REGISTER:
                 send_command_error(H9FRAME_ERROR_READ_ONLY_REGISTER, cm->source_id, cm->unicast.seqnum);
@@ -601,6 +639,11 @@ static void process_standard_reg(h9frame_t *cm) {
     }
     else if (cm->type == H9FRAME_TYPE_GET_REG && cm->dlc == 1) {
         switch (cm->data[0]) {
+            case NODE_FLAGS_STD_REGISTER: {
+                uint16_t flags = node_info.flags.raw;
+                send_reg_value2(NODE_FLAGS_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (flags >> 8) & 0xff, flags & 0xff);
+                return;
+            }
             case NODE_TYPE_STD_REGISTER:
                 send_reg_value2(NODE_TYPE_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (node_info.node_type >> 8) & 0xff, (node_info.node_type) & 0xff);
                 return;
@@ -631,6 +674,7 @@ static void process_standard_reg(h9frame_t *cm) {
 #error Unsupported MCU
 #endif
                 return;
+#ifdef SIGRD    // signature row readable from software (not on AT90CAN128)
             case NODE_SN_STD_REGISTER: {
                 // factory serial number: signature row 0x000E-0x0017 (lot number, wafer number, X/Y coordinates)
                 uint8_t sn[10];
@@ -639,9 +683,7 @@ static void process_standard_reg(h9frame_t *cm) {
                 CAN_send_reg_value(NODE_SN_STD_REGISTER, cm->source_id, cm->unicast.seqnum, sn, sizeof(sn));
                 return;
             }
-            case NODE_RESET_REASON_STD_REGISTER:
-                send_reg_value1(NODE_RESET_REASON_STD_REGISTER, cm->source_id, cm->unicast.seqnum, reset_reason);
-                return;
+#endif
             case NODE_POWER_SUPPLY_STD_REGISTER:
                 read_power_supply_register(cm->source_id, cm->unicast.seqnum);
                 return;

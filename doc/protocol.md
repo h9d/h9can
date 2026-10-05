@@ -102,12 +102,15 @@ Application         CAN bus
 Both messages carry the same 8-byte payload:
 
 ```
-data[0..1]  node_type    (uint16, big-endian)
-data[2..3]  version_major (uint16, big-endian)
-data[4..5]  version_minor (uint16, big-endian)
-data[6]     pcb_revision (ASCII char, e.g. 'A')
-data[7]     reset_reason  (see NODE_RESET_BY_* in h9def.h)
+data[0..3]  firmware version, packed big-endian uint32 (same as BOOTLOADER_TURNED_ON):
+            major bits 31-22 (10 bits), minor bits 21-11 (11 bits), patch bits 10-0 (11 bits)
+data[4]     PCB revision (ASCII char, e.g. 'A')
+data[5]     BOM revision
+data[6..7]  node flags (uint16, big-endian, NODE_FLAG_* in h9def.h), same as register 0
 ```
+
+The node type is not repeated in the payload, it is the broadcast group of the frame.
+See `doc/standard_registers.md` (register 0) for the flag bits.
 
 ### Discover
 

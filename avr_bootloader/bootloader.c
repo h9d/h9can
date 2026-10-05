@@ -15,6 +15,22 @@
 #include "../include/h9def.h"
 #include "../include/h9frame.h"
 #include "can.h"
+#include "../include/h9avr/bl_info.h"
+
+// version packed into 32 bits: major (10 bits) | minor (11 bits) | patch (11 bits)
+#if BOOTLOADER_VERSION_MAJOR > 0x3ff || BOOTLOADER_VERSION_MINOR > 0x7ff || BOOTLOADER_VERSION_PATCH > 0x7ff
+#error "Bootloader version out of range (major 0-1023, minor/patch 0-2047)"
+#endif
+#define BOOTLOADER_VERSION_PACKED (((uint32_t)BOOTLOADER_VERSION_MAJOR << 22) | ((uint32_t)BOOTLOADER_VERSION_MINOR << 11) | (uint32_t)BOOTLOADER_VERSION_PATCH)
+
+// info block at the end of flash, read by the application (see h9avr/bl_info.h)
+const h9_bl_info_t bl_info __attribute__((section(".blinfo"), used)) = {
+    .magic     = H9_BL_INFO_MAGIC,
+    .node_type = NODE_TYPE,
+    .pcb_rev   = PCB_REVISION,
+    .bom_rev   = BOM_REVISION,
+    .version   = BOOTLOADER_VERSION_PACKED,
+};
 
 static uint8_t seqnum = 0;
 
@@ -111,11 +127,8 @@ int main(void) {
     turn_on_msg.broadcast.group = NODE_TYPE;
     turn_on_msg.dlc = 8;
 
-    // version packed big-endian into 32 bits: major (10 bits) | minor (11 bits) | patch (11 bits)
-#if BOOTLOADER_VERSION_MAJOR > 0x3ff || BOOTLOADER_VERSION_MINOR > 0x7ff || BOOTLOADER_VERSION_PATCH > 0x7ff
-#error "Bootloader version out of range (major 0-1023, minor/patch 0-2047)"
-#endif
-    const uint32_t version = ((uint32_t)BOOTLOADER_VERSION_MAJOR << 22) | ((uint32_t)BOOTLOADER_VERSION_MINOR << 11) | (uint32_t)BOOTLOADER_VERSION_PATCH;
+    // version big-endian
+    const uint32_t version = BOOTLOADER_VERSION_PACKED;
     turn_on_msg.data[0] = (version >> 24) & 0xff;
     turn_on_msg.data[1] = (version >> 16) & 0xff;
     turn_on_msg.data[2] = (version >> 8) & 0xff;
