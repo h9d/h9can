@@ -141,7 +141,7 @@ void CAN_init(uint16_t node_type, char hardware_rev, uint16_t version_major, uin
 
     //select mob 2 for broadcast
     CANPAGE = 0x02 << MOBNB0;
-    set_CAN_broadcast_id(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, 0);
+    set_CAN_broadcast_id(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, H9FRAME_BROADCAST_ID);
     set_CAN_broadcast_id_mask(H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, H9FRAME_NODE_TYPE_MASK);
     CANIDM4 |= 1 << IDEMSK; // set filter
     CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
@@ -225,6 +225,8 @@ uint8_t __attribute__((weak)) CAN_put_msg(h9frame_t *cm) {
     else {
         uint8_t tmp_idx = (uint8_t) ((can_tx_buf_top + 1) & CAN_TX_BUF_INDEX_MASK);
 
+        //TODO: rozwarzyc czy nie zwiekszyc bo przy multi frame sie ten bufor skonczy, obecnie jest 8, do 64 na chwile obecna da sie powiekszyc, moze dodac wysylanie blokujace?
+        // ale trzeba wziasc pod uwage ze nie mozna czekac z wylaczonymi przerwaniami
         if (can_tx_buf_bottom != tmp_idx) {
             calc_can_id(&can_tx_buf[can_tx_buf_top].canidt1, &can_tx_buf[can_tx_buf_top].canidt2, &can_tx_buf[can_tx_buf_top].canidt3, &can_tx_buf[can_tx_buf_top].canidt4, cm);
 
@@ -528,30 +530,34 @@ static void send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum
 
     size_t value_ix = 0;
 
-    for (int msg_num = 0; value_ix < length; ++msg_num) {
+    for (uint8_t msg_num = 0; value_ix < length; ++msg_num) {
         uint8_t i = 1;
+        cm.data[0] = registry;
+
+        if (length < 8) {
+            cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
+        }
+        else if (msg_num == 0) {
+            cm.unicast.flags = H9FRAME_FLAG_MULTI_FRAME_FIRST;
+            cm.data[1] = (length + 5) / 6;
+            i++;
+        }
+        else if (value_ix < length) {
+            cm.unicast.flags = H9FRAME_FLAG_MULTI_FRAME_MIDDLE;
+            cm.data[1] = msg_num;
+            i++;
+        }
+        else {
+            cm.unicast.flags = H9FRAME_FLAG_MULTI_FRAME_LAST;
+            cm.data[1] = msg_num;
+            i++;
+        }
+
         for (; i < 8 && value_ix < length; ++i) {
             cm.data[i] = value[value_ix];
             value_ix++;
         }
         cm.dlc = i;
-
-        if (length < 8) {
-            cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
-            cm.data[0] = registry;
-        }
-        else if (msg_num == 0) {
-            cm.unicast.flags = H9FRAME_FLAG_MULTI_MSG_FIRST;
-            cm.data[0] = registry;
-        }
-        else if (value_ix < length) {
-            cm.unicast.flags = H9FRAME_FLAG_MULTI_MSG_MIDDLE;
-            cm.data[0] = msg_num;
-        }
-        else {
-            cm.unicast.flags = H9FRAME_FLAG_MULTI_MSG_LAST;
-            cm.data[0] = msg_num;
-        }
 
         CAN_put_msg(&cm);
     }
@@ -560,7 +566,7 @@ static void send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum
 static void send_reg_value1(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
     cm.unicast.destination_id = destination;
     cm.unicast.seqnum = seqnum;
 
@@ -574,7 +580,7 @@ static void send_reg_value2(uint8_t registry, uint8_t destination, uint8_t seqnu
     h9frame_t cm;
 
     cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
     cm.unicast.destination_id = destination;
     cm.unicast.seqnum = seqnum;
 
@@ -588,7 +594,7 @@ static void send_reg_value2(uint8_t registry, uint8_t destination, uint8_t seqnu
 static void send_reg_value3(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
     cm.unicast.destination_id = destination;
     cm.unicast.seqnum = seqnum;
 
@@ -603,7 +609,7 @@ static void send_reg_value3(uint8_t registry, uint8_t destination, uint8_t seqnu
 static void send_reg_value4(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
     cm.unicast.destination_id = destination;
     cm.unicast.seqnum = seqnum;
 
@@ -619,7 +625,7 @@ static void send_reg_value4(uint8_t registry, uint8_t destination, uint8_t seqnu
 static void send_reg_value6(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4, uint8_t value5, uint8_t value6) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_MSG;
+    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
     cm.unicast.destination_id = destination;
     cm.unicast.seqnum = seqnum;
 
@@ -654,6 +660,10 @@ static void CAN_send_node_info_broadcast(uint8_t turn_on) {
     cm.data[6] = node_info.hardware_revision;
     cm.data[7] = reset_reason;
     CAN_put_msg(&cm);
+}
+
+void __attribute__((weak)) read_power_supply_register(uint8_t destination_id, uint8_t seqnum) {
+    send_command_error(H9FRAME_ERROR_UNSUPPORTED_REGISTER, destination_id, seqnum);
 }
 
 static void process_standard_reg(h9frame_t *cm) {
@@ -700,10 +710,9 @@ static void process_standard_reg(h9frame_t *cm) {
                 send_reg_value6(NODE_VERSION_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (node_info.version_major >> 8), node_info.version_major & 0xff, (node_info.version_minor >> 8) & 0xff, node_info.version_minor & 0xff, (node_info.version_patch >> 8) & 0xff, node_info.version_patch & 0xff);
                 return;
             case NODE_BUILD_INFO_STD_REGISTER: {
-                //TODO: add multi-message value with message counter on 7 byte
                 size_t len = 0;
                 for (; node_info.build_info[len] && len < (H9FRAME_MAX_REGISTER_SIZE - 1); len++);
-                send_reg_value(NODE_BUILD_INFO_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (uint8_t*)&node_info.build_info, len+1);
+                send_reg_value(NODE_BUILD_INFO_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (uint8_t*)&node_info.build_info, len);
                 return;
             }
             case NODE_MCU_TYPE_STD_REGISTER:
@@ -727,8 +736,9 @@ static void process_standard_reg(h9frame_t *cm) {
             case NODE_RESET_REASON_STD_REGISTER:
                 send_reg_value1(NODE_RESET_REASON_STD_REGISTER, cm->source_id, cm->unicast.seqnum, reset_reason);
                 return;
-            //case NODE_POWER_SUPPLY_STD_REGISTER,
-            //     return;
+            case NODE_POWER_SUPPLY_STD_REGISTER:
+                read_power_supply_register(cm->source_id, cm->unicast.seqnum);
+                return;
             //case NODE_MCU_TEMP_STD_REGISTER,
             //     return;
             case NODE_ID_STD_REGISTER:

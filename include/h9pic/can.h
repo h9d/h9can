@@ -11,6 +11,8 @@
 
 #include <xc.h>
 
+extern void (*read_power_supply_register)(uint8_t destination_id, uint8_t seqnum);
+
 void can_interrupt(void);
 
 #endif	/* CAN_H */

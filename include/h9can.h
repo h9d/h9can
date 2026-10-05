@@ -20,9 +20,6 @@
 #include "h9frame.h"
 #include "h9def.h"
 
-/** Current node ID, loaded from EEPROM by CAN_init(). */
-extern volatile uint8_t can_node_id;
-
 /**
  * @brief Initialise the CAN peripheral and load the node ID from EEPROM.
  *
@@ -31,13 +28,13 @@ extern volatile uint8_t can_node_id;
  * and stores the node metadata used when responding to standard registers.
  *
  * @param node_type       Application-specific node type (16-bit, see doc/nodes.md).
- * @param hardware_rev    Hardware revision letter, e.g. @c 'a'.
+ * @param default_id      Default node id
  * @param version_major   Firmware version major number.
  * @param version_minor   Firmware version minor number.
  * @param version_patch   Firmware version patch number.
  * @param build_info      Null-terminated build-info string (e.g. git-describe output).
  */
-void CAN_init(uint16_t node_type, char hardware_rev,
+void CAN_init(uint16_t node_type,  uint8_t default_id,
               uint16_t version_major, uint16_t version_minor, uint16_t version_patch,
               const char *build_info);
 
