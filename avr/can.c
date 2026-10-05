@@ -2,7 +2,7 @@
 /*
  * H9 CAN protocol implementation for AVR
  *
- * Copyright (C) 2017-2024 Kamil Pałkowski
+ * Copyright (C) 2017-2026 Kamil Pałkowski
  *
  */
 
@@ -14,6 +14,8 @@
 #include <h9def.h>
 
 #include "avr/can.h"
+
+#include <errno.h>
 
 #define CAN_RX_BUF_SIZE 16
 #define CAN_RX_BUF_INDEX_MASK 0x0F
@@ -41,9 +43,9 @@ static can_buf_t can_tx_buf[CAN_TX_BUF_SIZE];
 static volatile uint8_t can_tx_buf_top = 0;
 static volatile uint8_t can_tx_buf_bottom = 0;
 
-volatile uint16_t can_node_id;
+volatile uint8_t can_node_id;
 static uint8_t reset_reason __attribute__ ((section (".noinit")));
-static uint16_t ee_node_id __attribute__((section(".eepromfixed"))) = H9MSG_BROADCAST_ID - 1;
+static uint8_t ee_node_id __attribute__((section(".eepromfixed"))) = 0;
 
 static struct {
     uint16_t node_type;
@@ -54,13 +56,19 @@ static struct {
 } node_info;
 
 static void read_node_id(void);
-static void write_node_id(uint16_t id);
-static uint8_t calc_can_id1(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id);
-static uint8_t calc_can_id2(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id);
-static uint8_t calc_can_id3(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id);
-static uint8_t calc_can_id4(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id);
-static void set_CAN_id(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id);
-static void set_CAN_id_mask(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id);
+static void write_node_id(uint8_t id);
+
+static void calc_can_id(volatile uint8_t* id1, volatile uint8_t* id2, volatile uint8_t* id3, volatile uint8_t* id4, h9msg_t* cm);
+static void calc_can_unicast_id(volatile uint8_t* id1, volatile uint8_t* id2, volatile uint8_t* id3, volatile uint8_t* id4, uint8_t priority, uint8_t type, uint8_t flags, uint8_t src, uint8_t dst, uint8_t seq);
+static void calc_can_broadcast_id(volatile uint8_t* id1, volatile uint8_t* id2, volatile uint8_t* id3, volatile uint8_t* id4, uint8_t priority, uint8_t type, uint8_t flags, uint8_t src, uint16_t node_type);
+
+static void CAN_send_node_info_broadcast(uint8_t turn_on);
+
+static void set_CAN_id(h9msg_t* cm);
+static void set_CAN_unicast_id(uint8_t priority, uint8_t type, uint8_t flags, uint8_t src, uint8_t dst, uint8_t seq);
+static void set_CAN_unicast_id_mask(uint8_t priority, uint8_t type, uint8_t flags, uint8_t src, uint8_t dst, uint8_t seq);
+static void set_CAN_broadcast_id(uint8_t priority, uint8_t type, uint8_t flags, uint8_t src, uint16_t node_type);
+static void set_CAN_broadcast_id_mask(uint8_t priority, uint8_t type, uint8_t flags, uint8_t src, uint16_t node_type);
 
 /* for software reset */
 __attribute__((naked)) __attribute__((section(".init3"))) void wdt_init(void) {
@@ -127,141 +135,240 @@ ISR(CAN_INT_vect) {
 }
 
 
-uint8_t process_msg(h9msg_t *cm) {
-    if ((cm->type & H9MSG_NODE_STANDARD_MSG_BROADCAST_SUBGROUP_MASK) == H9MSG_NODE_STANDARD_MSG_BROADCAST_SUBGROUP
-             && (cm->destination_id == can_node_id || cm->destination_id == H9MSG_BROADCAST_ID)) {
-        if (cm->type == H9MSG_TYPE_DISCOVER && cm->dlc == 0) {
-            h9msg_t cm_res;
-            CAN_init_response_msg(cm, &cm_res);
-            cm_res.dlc = 8;
-            cm_res.data[0] = (node_info.node_type >> 8) & 0xff;
-            cm_res.data[1] = (node_info.node_type) & 0xff;
-            cm_res.data[2] = (node_info.version_major >> 8);
-            cm_res.data[3] = node_info.version_major & 0xff;
-            cm_res.data[4] = (node_info.version_minor >> 8) & 0xff;
-            cm_res.data[5] = node_info.version_minor & 0xff;
-            cm_res.data[6] = node_info.hardware_revision;
-            cm_res.data[7] = reset_reason;
-            CAN_put_msg(&cm_res);
-            return 0;
+static void __attribute__((noreturn)) mcu_reset(void) {
+    cli();
+    do {
+        wdt_enable(WDTO_15MS);
+        for(;;) {
         }
-        else if (cm->type == H9MSG_TYPE_NODE_RESET && cm->dlc == 0) {
-            cli();
-            do {
-                wdt_enable(WDTO_15MS);
-                for(;;) {
-                }
-            } while(0);
-        }
-    }
-    else if ((cm->type & H9MSG_NODE_STANDARD_MSG_GROUP_MASK) == H9MSG_NODE_STANDARD_MSG_GROUP && cm->destination_id == can_node_id) {
-        if (cm->type == H9MSG_TYPE_SET_REG && cm->dlc > 1) {
-            if (cm->data[0] >= 10)
-                return 1;
-            h9msg_t cm_res;
-            CAN_init_response_msg(cm, &cm_res);
-            cm_res.dlc = 2;
-            cm_res.data[0] = cm->data[0];
-            if (cm_res.data[0] == NODE_ID_STD_REGISTER) {
-                if (cm->dlc == 3) {
-                    write_node_id((cm->data[1] & 0x01) << 8 | cm->data[2]);
+    } while(0);
+}
 
-                    cm_res.data[1] = (can_node_id >> 8) & 0x01;
-                    cm_res.data[2] = (can_node_id) & 0xff;
-                    cm_res.dlc = 3;
-                }
-                else {
-                    cm_res.type = H9MSG_TYPE_ERROR;
-                    cm_res.data[0] = H9FRAME_ERROR_REGISTER_SIZE_MISMATCH;
-                    cm_res.dlc = 1;
-                }
-            }
-            else if (cm_res.data[0] < NODE_STD_REGISTER_LAST) {
-                cm_res.type = H9MSG_TYPE_ERROR;
-                cm_res.data[0] = H9FRAME_ERROR_READ_ONLY_REGISTER;
-                cm_res.dlc = 1;
+void send_command_error(uint8_t errno, uint8_t destination, uint8_t seqnum) {
+    h9msg_t cm;
+    cm.priority = H9MSG_PRIORITY_LOW;
+    cm.type = H9MSG_TYPE_COMMAND_ERROR;
+    cm.flags = 0;
+    cm.source_id = can_node_id;
+    cm.destination_id = destination;
+    cm.seqnum = seqnum;
+
+    cm.data[0] = errno;
+    cm.dlc = 1;
+    CAN_put_msg(&cm);
+}
+
+void send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t* value, size_t length) {
+    //TODO: add multi-message value with message counter on 7 byte
+    h9msg_t cm;
+    cm.priority = H9MSG_PRIORITY_LOW;
+    cm.type = H9MSG_TYPE_REG_VALUE;
+    cm.flags = 0;
+    cm.source_id = can_node_id;
+    cm.destination_id = destination;
+    cm.seqnum = seqnum;
+
+    length = length < 7 ? length : 7;
+
+    uint8_t i = 0;
+    for (; i < length; ++i) {
+        cm.data[1 + i] = value[i];
+    }
+
+    cm.data[0] = registry;
+    cm.dlc = length + 1;
+    CAN_put_msg(&cm);
+}
+
+void send_reg_value1(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value) {
+    h9msg_t cm;
+    cm.priority = H9MSG_PRIORITY_LOW;
+    cm.type = H9MSG_TYPE_REG_VALUE;
+    cm.flags = 0;
+    cm.source_id = can_node_id;
+    cm.destination_id = destination;
+    cm.seqnum = seqnum;
+
+    cm.data[0] = registry;
+    cm.data[1] = value;
+    cm.dlc = 2;
+    CAN_put_msg(&cm);
+}
+
+void send_reg_value2(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2) {
+    h9msg_t cm;
+    cm.priority = H9MSG_PRIORITY_LOW;
+    cm.type = H9MSG_TYPE_REG_VALUE;
+    cm.flags = 0;
+    cm.source_id = can_node_id;
+    cm.destination_id = destination;
+    cm.seqnum = seqnum;
+
+    // uint8_t tmp[] = {value1, value2};
+    // send_reg_value(registry,destination,seqnum, tmp, 2);
+
+    cm.data[0] = registry;
+    cm.data[1] = value1;
+    cm.data[2] = value2;
+    cm.dlc = 3;
+    CAN_put_msg(&cm);
+}
+
+void send_reg_value3(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3) {
+    h9msg_t cm;
+    cm.priority = H9MSG_PRIORITY_LOW;
+    cm.type = H9MSG_TYPE_REG_VALUE;
+    cm.flags = 0;
+    cm.source_id = can_node_id;
+    cm.destination_id = destination;
+    cm.seqnum = seqnum;
+
+    cm.data[0] = registry;
+    cm.data[1] = value1;
+    cm.data[2] = value2;
+    cm.data[3] = value3;
+    cm.dlc = 4;
+    CAN_put_msg(&cm);
+}
+
+void send_reg_value4(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4) {
+    h9msg_t cm;
+    cm.priority = H9MSG_PRIORITY_LOW;
+    cm.type = H9MSG_TYPE_REG_VALUE;
+    cm.flags = 0;
+    cm.source_id = can_node_id;
+    cm.destination_id = destination;
+    cm.seqnum = seqnum;
+
+    cm.data[0] = registry;
+    cm.data[1] = value1;
+    cm.data[2] = value2;
+    cm.data[3] = value3;
+    cm.data[4] = value4;
+    cm.dlc = 5;
+    CAN_put_msg(&cm);
+}
+
+static void process_standard_reg(h9msg_t *cm) {
+    if (cm->type == H9MSG_TYPE_SET_REG && cm->dlc > 1) {
+        if (cm->data[0] == NODE_ID_STD_REGISTER) {
+            if (cm->dlc == 3) {
+                write_node_id((cm->data[1] & 0x01) << 8 | cm->data[2]);
+
+                send_reg_value2(NODE_ID_STD_REGISTER, cm->source_id, cm->seqnum, (can_node_id >> 8) & 0x01, (can_node_id) & 0xff);
+                return ;
             }
             else {
-                cm_res.type = H9MSG_TYPE_ERROR;
-                cm_res.data[0] = H9FRAME_ERROR_INVALID_REGISTER;
-                cm_res.dlc = 1;
+                send_command_error(H9FRAME_ERROR_REGISTER_SIZE_MISMATCH, cm->source_id, cm->seqnum);
+                return;
             }
-            CAN_put_msg(&cm_res);
-            return 0;
         }
-        else if (cm->type == H9MSG_TYPE_GET_REG && cm->dlc == 1) {
-            if (cm->data[0] >= 10)
-                return 1;
-            h9msg_t cm_res;
-            CAN_init_response_msg(cm, &cm_res);
-            cm_res.dlc = 2;
-            cm_res.data[0] = cm->data[0];
-            switch (cm_res.data[0]) {
-                case NODE_TYPE_STD_REGISTER:
-                    cm_res.data[1] = (node_info.node_type >> 8) & 0xff;
-                    cm_res.data[2] = (node_info.node_type ) & 0xff;
-                    cm_res.dlc = 3;
-                    break;
-                case NODE_HARDWARE_REVISION_STD_REGISTER:
-                    cm_res.data[1] = 'a';
-                    cm_res.dlc = 2;
-                    break;
-                case NODE_VERSION_STD_REGISTER:
-                    cm_res.data[1] = (node_info.version_major >> 8);
-                    cm_res.data[2] = node_info.version_major & 0xff;
-                    cm_res.data[3] = (node_info.version_minor >> 8) & 0xff;
-                    cm_res.data[4] = node_info.version_minor & 0xff;
-                    cm_res.dlc = 5;
-                    break;
-                case NODE_BUILD_INFO_STD_REGISTER:
+        else if (cm->data[0] < NODE_STD_REGISTER_LAST) {
+            send_command_error(H9FRAME_ERROR_READ_ONLY_REGISTER, cm->source_id, cm->seqnum);
+            return;
+        }
+        else {
+            send_command_error(H9FRAME_ERROR_INVALID_REGISTER, cm->source_id, cm->seqnum);
+            return;
+        }
+    }
+    else if (cm->type == H9MSG_TYPE_GET_REG && cm->dlc == 1) {
+        switch (cm->data[0]) {
+            case NODE_TYPE_STD_REGISTER:
+                send_reg_value2(NODE_TYPE_STD_REGISTER, cm->source_id, cm->seqnum, (node_info.node_type >> 8) & 0xff, (node_info.node_type ) & 0xff);
+                return;
+            case NODE_HARDWARE_REVISION_STD_REGISTER:
+                send_reg_value1(NODE_HARDWARE_REVISION_STD_REGISTER, cm->source_id, cm->seqnum, 'a');
+                return;
+            case NODE_VERSION_STD_REGISTER:
+                send_reg_value4(NODE_VERSION_STD_REGISTER, cm->source_id, cm->seqnum, (node_info.version_major >> 8), node_info.version_major & 0xff, (node_info.version_minor >> 8) & 0xff, node_info.version_minor & 0xff);
+                return;
+            case NODE_BUILD_INFO_STD_REGISTER:
                 //TODO: add multi-message value with message counter on 7 byte
-                    cm_res.dlc = 7;
-                    char *tmp = node_info.build_info;
-                    uint8_t i = 0;
-                    for (; tmp[i] && i < 6; ++i) {
-                        cm_res.data[1 + i] = tmp[i];
-                    }
-                    for (; i < 6; ++i) {
-                        cm_res.data[1 + i] = '\0';
-                    }
-                    break;
-                case NODE_ID_STD_REGISTER:
-                    cm_res.data[1] = (can_node_id >> 8) & 0x01;
-                    cm_res.data[2] = (can_node_id) & 0xff;
-                    cm_res.dlc = 3;
-                    break;
-                case NODE_MCU_TYPE_STD_REGISTER:
+                send_reg_value(NODE_BUILD_INFO_STD_REGISTER, cm->source_id, cm->seqnum, (uint8_t*)&node_info.build_info, H9MSG_MAX_REGISTER_SIZE);
+                return;
+            case NODE_ID_STD_REGISTER:
+                send_reg_value2(NODE_ID_STD_REGISTER, cm->source_id, cm->seqnum, (can_node_id >> 8) & 0x01, (can_node_id) & 0xff);
+                return;
+            case NODE_MCU_TYPE_STD_REGISTER:
 #if defined (__AVR_ATmega16M1__)
-                    cm_res.data[1] = NODE_MCU_ATMEGA16M1;
+                send_reg_value1(NODE_MCU_TYPE_STD_REGISTER, cm->source_id, cm->seqnum, NODE_MCU_ATMEGA16M1);
 #elif defined (__AVR_ATmega32M1__)
-                    cm_res.data[1] = NODE_MCU_ATMEGA32M1;
+                send_reg_value1(NODE_MCU_TYPE_STD_REGISTER, cm->source_id, cm->seqnum, NODE_MCU_ATMEGA32M1);
 #elif defined (__AVR_ATmega64M1__)
-                    cm_res.data[1] = NODE_MCU_ATMEGA64M1;
+                send_reg_value1(NODE_MCU_TYPE_STD_REGISTER, cm->source_id, cm->seqnum, NODE_MCU_ATMEGA64M1);
 #elif defined (__AVR_AT90CAN128__)
-                    cm_res.data[1] = NODE_MCU_AT90CAN128;
+                send_reg_value1(NODE_MCU_TYPE_STD_REGISTER, cm->source_id, cm->seqnum, NODE_MCU_AT90CAN128);
 #elif defined (__AVR_ATmega32C1__)
-                    cm_res.data[1] = NODE_MCU_ATMEGA32C1;
+                send_reg_value1(NODE_MCU_TYPE_STD_REGISTER, cm->source_id, cm->seqnum, NODE_MCU_ATMEGA32C1);
 #else
 #error Unsupported MCU
 #endif
-                    cm_res.dlc = 2;
-                    break;
-                case NODE_SN_STD_REGISTER: //CPU serial ID
-                    cm_res.data[1] = 0;
-                    cm_res.data[2] = 0;
-                    cm_res.data[3] = 0;
-                    cm_res.data[4] = 0;
-                    cm_res.dlc = 5;
-                case NODE_RESET_REASON_STD_REGISTER:
-                    cm_res.data[1] = reset_reason;
-                    cm_res.dlc = 2;
-                    break;
-                default:
-                    cm_res.type = H9MSG_TYPE_ERROR;
-                    cm_res.data[0] = H9FRAME_ERROR_INVALID_REGISTER;
-                    cm_res.dlc = 1;
+                return;
+            case NODE_SN_STD_REGISTER: //CPU serial ID
+                send_reg_value4(NODE_SN_STD_REGISTER, cm->source_id, cm->seqnum, 0, 0, 0, 0);
+                return;
+            case NODE_RESET_REASON_STD_REGISTER:
+                send_reg_value1(NODE_RESET_REASON_STD_REGISTER, cm->source_id, cm->seqnum, reset_reason);
+                return;
+            default:
+                send_command_error(H9FRAME_ERROR_INVALID_REGISTER, cm->source_id, cm->seqnum);
+                return;
+        }
+        return;
+    }
+    // else if (cm->type == H9MSG_TYPE_SET_BIT && cm->dlc == 2) {
+    //     return ;
+    // }
+    // else if (cm->type == H9MSG_TYPE_CLEAR_BIT && cm->dlc == 2) {
+    //     return ;
+    // }
+
+    send_command_error(H9FRAME_ERROR_UNSUPPORTED_OPERATION, cm->source_id, cm->seqnum);
+}
+
+uint8_t process_msg(h9msg_t *cm) {
+    /* --- BROADCAST --- */
+    if (cm->type & H9MSG_UNICAST_BROADCAST_BIT) {
+        if (cm->type == H9MSG_TYPE_DISCOVER || cm->type == H9MSG_TYPE_GROUP_RESET) {
+            if (cm->broadcast_group == node_info.node_type || cm->broadcast_group == H9MSG_BROADCAST_ID) {
+                if (cm->type == H9MSG_TYPE_DISCOVER) {
+                    CAN_send_node_info_broadcast(0);
+                    return 0;
+                }
+                else if (cm->type == H9MSG_TYPE_GROUP_RESET) {
+                    mcu_reset();
+                    return 0;
+                }
             }
-            CAN_put_msg(&cm_res);
+            else {
+                // INVALID_MSG but we don't answere on broadcast
+                return 0;
+            }
+        }
+
+        return 1;
+    }
+    /* --- UNICAST --- */
+    else if (!(cm->type & H9MSG_UNICAST_BROADCAST_BIT)) {
+        if (cm->destination_id != can_node_id) {
+            return 0; //not for me
+        }
+
+        /* -- RCV BOOTLOADER MSG -- */
+        if (cm->type <= H9MSG_TYPE_PAGE_FILL_BREAK) {
+            send_command_error(H9FRAME_ERROR_INVALID_MSG, cm->source_id, cm->seqnum);
+            return 0;
+        }
+
+        /* -- MULTIPLE MSG -- */
+        if (cm->flags != 0 && cm->type != H9MSG_TYPE_SET_REG && cm->type != H9MSG_TYPE_REG_VALUE) {
+            send_command_error(H9FRAME_ERROR_INVALID_MSG, cm->source_id, cm->seqnum);
+            return 0;
+        }
+
+        if (cm->type == H9MSG_TYPE_NODE_RESET) {
+            mcu_reset();
             return 0;
         }
         else if (cm->type == H9MSG_TYPE_NODE_UPGRADE && cm->dlc == 0) {
@@ -269,36 +376,22 @@ uint8_t process_msg(h9msg_t *cm) {
             cli();
             asm volatile ( "jmp " STR(BOOTSTART) );
 #else
-            #warning "Node upgrade (bootloader) disable"
-            h9msg_t cm_res;
-            CAN_init_response_msg(cm, &cm_res);
-            cm_res.type = H9MSG_TYPE_ERROR;
-            cm_res.data[0] = H9MSG_ERROR_BOOTLOADER_UNSUPPORTED;
-            cm_res.dlc = 1;
-            CAN_put_msg(&cm_res);
+#warning "Node upgrade (bootloader) disable"
+            send_command_error(H9MSG_ERROR_BOOTLOADER_UNSUPPORTED, cm->source_id, cm->seqnum);
             return 0;
 #endif //BOOTSTART
         }
-        else if (cm->type == H9MSG_TYPE_SET_BIT && cm->dlc == 2) {
-            return 1;
+        else if (cm->type == H9MSG_TYPE_SET_REG || cm->type == H9MSG_TYPE_GET_REG || cm->type == H9MSG_TYPE_SET_BIT || cm->type == H9MSG_TYPE_CLEAR_BIT) {
+            /* --- STANDARD REG OPERATION -- */
+            if (cm->dlc > 0 && cm->data[0] < 10) {
+                process_standard_reg(cm);
+            }
+            else {
+                return 1;
+            }
         }
-        else if (cm->type == H9MSG_TYPE_CLEAR_BIT && cm->dlc == 2) {
-            return 1;
-        }
-        else if (cm->type == H9MSG_TYPE_TOGGLE_BIT && cm->dlc == 2) {
-            return 1;
-        }
+        return 1; //THEORETICALLY H9MSG_TYPE_COMMAND_ERROR OR H9MSG_TYPE_REG_VALUE
     }
-    else if ((cm->type & H9MSG_NODE_ALL_REMOTE_MSG_GROUP_MASK) == H9MSG_NODE_ALL_REMOTE_MSG_GROUP) {
-        return 2;
-    }
-
-    h9msg_t cm_res;
-    CAN_init_response_msg(cm, &cm_res);
-    cm_res.type = H9MSG_TYPE_ERROR;
-    cm_res.data[0] = H9FRAME_ERROR_INVALID_MSG;
-    cm_res.dlc = 1;
-    CAN_put_msg(&cm_res);
     return 0;
 }
 
@@ -337,34 +430,48 @@ void CAN_init(uint16_t node_type, char hardware_rev, uint16_t version_major, uin
         CANSTMOB = 0x00;             // Clear mob status register;
     }
 
-    //select mob 1 for broadcast with type form 3rd group
+    //select mob 1 for unicast
     CANPAGE = 0x01 << MOBNB0;
-    set_CAN_id(0, H9MSG_NODE_STANDARD_MSG_BROADCAST_SUBGROUP, 0, H9MSG_BROADCAST_ID, 0);
-    set_CAN_id_mask(0, H9MSG_NODE_STANDARD_MSG_BROADCAST_SUBGROUP_MASK, 0, (1<<H9MSG_ID_BIT_LENGTH)-1, 0);
+    set_CAN_unicast_id(0, H9MSG_UNICAST_MSG_TYPE_GROUP, 0, 0, can_node_id, 0);
+    set_CAN_unicast_id_mask(0, H9MSG_UNICAST_MSG_TYPE_GROUP_MASK, 0, 0, H9MSG_ID_MASK, 0); //H9MSG_TYPE_GROUP_2 | H9MSG_TYPE_GROUP_3
     CANIDM4 |= 1 << IDEMSK; // set filter
     CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
 
-    //select mob 2 for unicast
+    //select mob 2 for broadcast
     CANPAGE = 0x02 << MOBNB0;
-    set_CAN_id(0, H9MSG_NODE_STANDARD_MSG_GROUP, 0, can_node_id, 0);
-    set_CAN_id_mask(0, H9MSG_NODE_STANDARD_MSG_GROUP_MASK, 0, (1<<H9MSG_ID_BIT_LENGTH)-1, 0); //H9MSG_TYPE_GROUP_2 | H9MSG_TYPE_GROUP_3
+    set_CAN_broadcast_id(0, H9MSG_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, 0, 0);
+    set_CAN_broadcast_id_mask(0, H9MSG_SPECIAL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, 0, H9MSG_NODE_TYPE_MASK);
     CANIDM4 |= 1 << IDEMSK; // set filter
     CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
 
+    CANPAGE = 0x03 << MOBNB0;
+    set_CAN_broadcast_id(0, H9MSG_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, 0, node_type);
+    set_CAN_broadcast_id_mask(0, H9MSG_SPECIAL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, 0, H9MSG_NODE_TYPE_MASK) ;
+    CANIDM4 |= 1 << IDEMSK; // set filter
+    CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
 
-    CANIE2 = ( 1 << IEMOB0 ) | ( 1 << IEMOB1 ) | ( 1 << IEMOB2 ); //interupt mob 0 1 and 2
+    CANIE2 = ( 1 << IEMOB0 ) | ( 1 << IEMOB1 ) | ( 1 << IEMOB2 ) | ( 1 << IEMOB3 ); //interupt mob 0 1 2 3
 
     CANGIE = (1<<ENBOFF) | (1<<ENIT) | (1<<ENRX) | (1<<ENTX) | (1<<ENERR) | (1<<ENBX) | (1<<ENERG);
     CANGCON = 1<<ENASTB;
 }
 
-
 void CAN_send_turned_on_broadcast(void) {
-    h9msg_t cm;
-    CAN_init_new_msg(&cm);
+    CAN_send_node_info_broadcast(1);
+}
 
-    cm.type = H9MSG_TYPE_NODE_TURNED_ON;
-    cm.destination_id = H9MSG_BROADCAST_ID;
+static void CAN_send_node_info_broadcast(uint8_t turn_on) {
+    h9msg_t cm;
+
+    cm.priority = H9MSG_PRIORITY_LOW;
+    if (turn_on)
+        cm.type = H9MSG_TYPE_NODE_TURNED_ON;
+    else
+        cm.type = H9MSG_TYPE_NODE_INFO;
+    cm.flags = 0;
+    cm.source_id = can_node_id;
+    cm.broadcast_group = node_info.node_type;
+
     cm.dlc = 8;
     cm.data[0] = (node_info.node_type >> 8) & 0xff;
     cm.data[1] = (node_info.node_type) & 0xff;
@@ -378,16 +485,15 @@ void CAN_send_turned_on_broadcast(void) {
 }
 
 
-void CAN_set_mob_for_remote_node1(uint16_t remote_node_id, uint8_t all_msg_group) {
-    CANPAGE = 0x03 << MOBNB0; //select mob 3
-    if (all_msg_group) {
-        set_CAN_id(0, H9MSG_NODE_ALL_REMOTE_MSG_GROUP, 0, 0, remote_node_id);
-        set_CAN_id_mask(0, H9MSG_NODE_ALL_REMOTE_MSG_GROUP_MASK, 0, 0, (1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
-    else {
-        set_CAN_id(0, H9MSG_NODE_RESPONSE_MSG_GROUP, 0, 0, remote_node_id);
-        set_CAN_id_mask(0, H9MSG_NODE_RESPONSE_MSG_GROUP_MASK, 0, 0, (1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
+void CAN_set_msg_filter_1(uint8_t remote_node_id, uint8_t remote_node_id_active, uint16_t broadcast_group, uint8_t broadcast_group_active) {
+    CANPAGE = 0x04 << MOBNB0; //select mob 4
+
+    uint8_t node_id_mask = remote_node_id_active ? H9MSG_ID_MASK : 0;
+    uint16_t node_type_mask = broadcast_group_active ? H9MSG_NODE_TYPE_MASK : 0;
+
+    set_CAN_broadcast_id(0, H9MSG_ALL_BROADCAST_MSG_TYPE_GROUP, 0, remote_node_id, broadcast_group);
+    set_CAN_broadcast_id_mask(0, H9MSG_ALL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, node_id_mask, node_type_mask);
+
     CANIDM4 |= 1 << IDEMSK; // set filter
     CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
 
@@ -395,37 +501,19 @@ void CAN_set_mob_for_remote_node1(uint16_t remote_node_id, uint8_t all_msg_group
 }
 
 
-void CAN_set_mob_for_remote_node2(uint16_t remote_node_id, uint8_t all_msg_group) {
-    CANPAGE = 0x04 << MOBNB0; //select mob 4
-    if (all_msg_group) {
-        set_CAN_id(0, H9MSG_NODE_ALL_REMOTE_MSG_GROUP, 0, 0, remote_node_id);
-        set_CAN_id_mask(0, H9MSG_NODE_ALL_REMOTE_MSG_GROUP_MASK, 0, 0, (1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
-    else {
-        set_CAN_id(0, H9MSG_NODE_RESPONSE_MSG_GROUP, 0, 0, remote_node_id);
-        set_CAN_id_mask(0, H9MSG_NODE_RESPONSE_MSG_GROUP_MASK, 0, 0, (1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
-    CANIDM4 |= 1 << IDEMSK; // set filter
-    CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
-    
-    CANIE2 |= 1 << IEMOB4;
-}
-
-
-void CAN_set_mob_for_remote_node3(uint16_t remote_node_id, uint8_t all_msg_group) {
+void CAN_set_msg_filter_2(uint8_t remote_node_id, uint8_t remote_node_id_active, uint16_t broadcast_group, uint8_t broadcast_group_active){
     CANPAGE = 0x05 << MOBNB0; //select mob 5
-    if (all_msg_group) {
-        set_CAN_id(0, H9MSG_NODE_ALL_REMOTE_MSG_GROUP, 0, 0, remote_node_id);
-        set_CAN_id_mask(0, H9MSG_NODE_ALL_REMOTE_MSG_GROUP_MASK, 0, 0, (1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
-    else {
-        set_CAN_id(0, H9MSG_NODE_RESPONSE_MSG_GROUP, 0, 0, remote_node_id);
-        set_CAN_id_mask(0, H9MSG_NODE_RESPONSE_MSG_GROUP_MASK, 0, 0, (1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
+
+    uint8_t node_id_mask = remote_node_id_active ? H9MSG_ID_MASK : 0;
+    uint16_t node_type_mask = broadcast_group_active ? H9MSG_NODE_TYPE_MASK : 0;
+
+    set_CAN_broadcast_id(0, H9MSG_ALL_BROADCAST_MSG_TYPE_GROUP, 0, remote_node_id, broadcast_group);
+    set_CAN_broadcast_id_mask(0, H9MSG_ALL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, node_id_mask, node_type_mask);
+
     CANIDM4 |= 1 << IDEMSK; // set filter
     CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
-    
-    CANIE2 |= 1 << IEMOB5;
+
+    CANIE2 |= 1 << IEMOB4;
 }
 
 
@@ -435,10 +523,10 @@ uint8_t CAN_try_put_msg(h9msg_t *cm) {
     if (CANEN2 & ( 1 << ENMOB0 )) {
         return 0;
     }
-    
+
     CANSTMOB = 0x00;                    // Clear mob status register
 
-    set_CAN_id(cm->priority, cm->type, cm->seqnum, cm->destination_id, cm->source_id);
+    set_CAN_id(cm);
 
     for (uint8_t idx = 0; idx < cm->dlc; ++idx)
         CANMSG = cm->data[idx];
@@ -446,6 +534,7 @@ uint8_t CAN_try_put_msg(h9msg_t *cm) {
     CANCDMOB = (1 << CONMOB0) | (1 << IDE) | (cm->dlc & 0x0f);
     return 1;
 }
+
 
 uint8_t CAN_put_msg(h9msg_t *cm) {
     cli();
@@ -457,10 +546,7 @@ uint8_t CAN_put_msg(h9msg_t *cm) {
         uint8_t tmp_idx = (uint8_t) ((can_tx_buf_top + 1) & CAN_TX_BUF_INDEX_MASK);
 
         if (can_tx_buf_bottom != tmp_idx) {
-            can_tx_buf[can_tx_buf_top].canidt1 = calc_can_id1(cm->priority, cm->type, cm->seqnum, cm->destination_id, cm->source_id);
-            can_tx_buf[can_tx_buf_top].canidt2 = calc_can_id2(cm->priority, cm->type, cm->seqnum, cm->destination_id, cm->source_id);
-            can_tx_buf[can_tx_buf_top].canidt3 = calc_can_id3(cm->priority, cm->type, cm->seqnum, cm->destination_id, cm->source_id);
-            can_tx_buf[can_tx_buf_top].canidt4 = calc_can_id4(cm->priority, cm->type, cm->seqnum, cm->destination_id, cm->source_id);
+            calc_can_id(&can_tx_buf[can_tx_buf_top].canidt1, &can_tx_buf[can_tx_buf_top].canidt2, &can_tx_buf[can_tx_buf_top].canidt3, &can_tx_buf[can_tx_buf_top].canidt4, cm);
 
             for (uint8_t idx = 0; idx < cm->dlc; ++idx)
                 can_tx_buf[can_tx_buf_top].data[idx] = cm->data[idx];
@@ -475,13 +561,15 @@ uint8_t CAN_put_msg(h9msg_t *cm) {
     return ret;
 }
 
+
 uint8_t CAN_get_msg(h9msg_t *cm) {
     if (can_rx_buf_top != can_rx_buf_bottom) {
         cm->priority = (can_rx_buf[can_rx_buf_bottom].canidt1 >> 7) & 0x01;
         cm->type = ((can_rx_buf[can_rx_buf_bottom].canidt1 >> 2) & 0x1f);
-        cm->seqnum = ((can_rx_buf[can_rx_buf_bottom].canidt1 << 3) & 0x18) | ((can_rx_buf[can_rx_buf_bottom].canidt2 >> 5) & 0x07);
-        cm->destination_id = ((can_rx_buf[can_rx_buf_bottom].canidt2 << 4) & 0x1f0) | ((can_rx_buf[can_rx_buf_bottom].canidt3 >> 4) & 0x0f);
-        cm->source_id = ((can_rx_buf[can_rx_buf_bottom].canidt3 << 5) & 0x1e0) | ((can_rx_buf[can_rx_buf_bottom].canidt4 >> 3) & 0x1f);
+        cm->flags = ((can_rx_buf[can_rx_buf_bottom].canidt1) & 0x03);
+        cm->source_id = can_rx_buf[can_rx_buf_bottom].canidt2;
+        cm->destination_id  = can_rx_buf[can_rx_buf_bottom].canidt3;
+        cm->seqnum = (can_rx_buf[can_rx_buf_bottom].canidt4 >> 3) & 0x1f;
 
         cm->dlc = can_rx_buf[can_rx_buf_bottom].cancdmob & 0x0f;
         uint8_t idx = 0;
@@ -492,9 +580,9 @@ uint8_t CAN_get_msg(h9msg_t *cm) {
 
         // 1st msg filter: mob filter/mask
         // 2nd msg filter
-        if (cm->source_id == H9MSG_BROADCAST_ID) { //invalid message, drop
-            return 0;
-        }
+        // if (cm->source_id == H9MSG_BROADCAST_ID) { //invalid message, drop
+        //     return 0;
+        // }
 
         return process_msg(cm);
     }
@@ -517,13 +605,10 @@ void CAN_init_response_msg(const h9msg_t *req, h9msg_t *res) {
     res->seqnum = req->seqnum;
     switch (req->type) {
         case H9MSG_TYPE_GET_REG:
-            res->type = H9MSG_TYPE_REG_VALUE;
-            break;
         case H9MSG_TYPE_SET_REG:
         case H9MSG_TYPE_SET_BIT:
         case H9MSG_TYPE_CLEAR_BIT:
-        case H9MSG_TYPE_TOGGLE_BIT:
-            res->type = H9MSG_TYPE_REG_EXTERNALLY_CHANGED;
+            res->type = H9MSG_TYPE_REG_VALUE;
             break;
         case H9MSG_TYPE_DISCOVER:
             res->type = H9MSG_TYPE_NODE_INFO;
@@ -536,50 +621,60 @@ void CAN_init_response_msg(const h9msg_t *req, h9msg_t *res) {
 
 
 void read_node_id(void) {
-    uint16_t node_id = eeprom_read_word(&ee_node_id);
-    if (node_id > 0 && node_id < H9MSG_BROADCAST_ID) {
-        can_node_id = node_id & ((1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
-    else {
-        can_node_id = 0;
-    }
+    can_node_id = eeprom_read_byte(&ee_node_id);
+    // if (node_id > 0 && node_id < 0xff) {
+    //     can_node_id = node_id;
+    // }
+    // else {
+    //     can_node_id = 0;
+    // }
 }
 
 
-void write_node_id(uint16_t id) {
+void write_node_id(uint8_t id) {
     cli();
-    eeprom_write_word(&ee_node_id, id);
+    eeprom_write_byte(&ee_node_id, id);
     sei();
 }
 
-static uint8_t calc_can_id1(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id) {
-    return ((priority << 7) & 0x80) | ((type << 2) & 0x7c) | ((seqnum >> 3) & 0x03);
-}
 
-static uint8_t calc_can_id2(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id) {
-    return ((seqnum << 5) & 0xe0) | ((destination_id >> 4) & 0x1f);
-}
-
-static uint8_t calc_can_id3(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id) {
-    return ((destination_id << 4) & 0xf0) | ((source_id >> 5) & 0x0f);
-}
-
-static uint8_t calc_can_id4(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id) {
-    return ((source_id << 3) & 0xf8);
+static void calc_can_id(volatile uint8_t* id1, volatile uint8_t* id2, volatile uint8_t* id3, volatile uint8_t* id4, h9msg_t* cm) {
+    calc_can_unicast_id(id1, id2, id3, id4, cm->priority, cm->type, cm->flags, cm->source_id, cm->destination_id, cm->seqnum);
 }
 
 
-void set_CAN_id(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id) {
-    CANIDT1 = calc_can_id1(priority, type, seqnum, destination_id, source_id);
-    CANIDT2 = calc_can_id2(priority, type, seqnum, destination_id, source_id);
-    CANIDT3 = calc_can_id3(priority, type, seqnum, destination_id, source_id);
-    CANIDT4 = calc_can_id4(priority, type, seqnum, destination_id, source_id);
+static void calc_can_unicast_id(volatile uint8_t* id1, volatile uint8_t* id2, volatile uint8_t* id3, volatile uint8_t* id4, uint8_t priority, uint8_t type, uint8_t flags, uint8_t src, uint8_t dst, uint8_t seq) {
+    *id1 = ((priority << 7) & 0x80) | ((type << 2) & 0x7c) | (flags & 0x03);
+    *id2 = src;
+    *id3 = dst;
+    *id4 = ((seq << 3) & 0xf8);
 }
 
 
-void set_CAN_id_mask(uint8_t priority, uint8_t type, uint8_t seqnum, uint16_t destination_id, uint16_t source_id) {
-    CANIDM1 = calc_can_id1(priority, type, seqnum, destination_id, source_id);
-    CANIDM2 = calc_can_id2(priority, type, seqnum, destination_id, source_id);
-    CANIDM3 = calc_can_id3(priority, type, seqnum, destination_id, source_id);
-    CANIDM4 = calc_can_id4(priority, type, seqnum, destination_id, source_id);
+static void calc_can_broadcast_id(volatile uint8_t* id1, volatile uint8_t* id2, volatile uint8_t* id3, volatile uint8_t* id4, uint8_t priority, uint8_t type, uint8_t flags, uint8_t src, uint16_t node_type) {
+    calc_can_unicast_id(id1, id2, id3, id4, priority, type, flags, src, (node_type >> 5) & 0xff, ((node_type << 3) & 0xf8));
+}
+
+
+static void set_CAN_id(h9msg_t* cm) {
+    calc_can_id(&CANIDT1, &CANIDT1, &CANIDT2, &CANIDT3, cm);
+}
+
+
+static void set_CAN_unicast_id(uint8_t priority, uint8_t type, uint8_t flags, uint8_t src, uint8_t dst, uint8_t seq) {
+    calc_can_unicast_id(&CANIDT1, &CANIDT1, &CANIDT2, &CANIDT3, priority, type & 0x0f, flags, src, dst, seq);
+}
+
+static void set_CAN_unicast_id_mask(uint8_t priority, uint8_t type, uint8_t flags, uint8_t src, uint8_t dst, uint8_t seq) {
+    calc_can_unicast_id(&CANIDM1, &CANIDM2, &CANIDM3, &CANIDM4, priority, type | 0x10, flags, src, dst, seq);
+}
+
+
+static void set_CAN_broadcast_id(uint8_t priority, uint8_t type, uint8_t flags, uint8_t src, uint16_t node_type) {
+    calc_can_broadcast_id(&CANIDT1, &CANIDT1, &CANIDT2, &CANIDT3, priority, type | 0x10, 0, src, node_type);
+}
+
+
+static void set_CAN_broadcast_id_mask(uint8_t priority, uint8_t type, uint8_t flags, uint8_t src, uint16_t node_type) {
+    calc_can_broadcast_id(&CANIDM1, &CANIDM2, &CANIDM3, &CANIDM4, priority, type | 0x10, 3, src, node_type);
 }

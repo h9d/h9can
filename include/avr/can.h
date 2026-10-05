@@ -13,14 +13,13 @@
 #include <avr/eeprom.h>
 #include "h9msg.h"
 
-extern volatile uint16_t can_node_id;
+extern volatile uint8_t can_node_id;
 
 void CAN_init(uint16_t node_type, char hardware_rev, uint16_t version_major, uint16_t version_minor, const char *build_info);
 void CAN_send_turned_on_broadcast(void);
 
-void CAN_set_mob_for_remote_node1(uint16_t remote_node_id, uint8_t all_msg_group);
-void CAN_set_mob_for_remote_node2(uint16_t remote_node_id, uint8_t all_msg_group);
-void CAN_set_mob_for_remote_node3(uint16_t remote_node_id, uint8_t all_msg_group);
+void CAN_set_msg_filter_1(uint8_t remote_node_id, uint8_t remote_node_id_active, uint16_t broadcast_group, uint8_t broadcast_group_active);
+void CAN_set_msg_filter_2(uint8_t remote_node_id, uint8_t remote_node_id_active, uint16_t broadcast_group, uint8_t broadcast_group_active);
 
 
 /**
@@ -40,6 +39,6 @@ uint8_t CAN_get_msg(h9msg_t*cm);
 void CAN_init_new_msg(h9msg_t *mes);
 void CAN_init_response_msg(const h9msg_t *req, h9msg_t *res);
 
-extern volatile uint16_t can_node_id;
+void send_command_error(uint8_t errno, uint8_t destination, uint8_t seqnum);
 
 #endif /*CAN_H*/

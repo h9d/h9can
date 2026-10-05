@@ -1,6 +1,6 @@
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.21)
 
-project(h9can VERSION 1.3)
+project(h9can VERSION 2.0)
 
 if (${CMAKE_SYSTEM_PROCESSOR} STREQUAL "avr")
     include_directories(${CMAKE_CURRENT_LIST_DIR}/include)

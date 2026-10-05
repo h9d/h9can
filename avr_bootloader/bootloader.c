@@ -80,7 +80,7 @@ void write_page(uint16_t page, uint16_t dst_id) {
                 CAN_put_msg_blocking(&cm_res);
             }
         }
-        else if (cm.source_id == dst_id && (cm.type & H9MSG_BOOTLOADER_MSG_GROUP_MASK) == H9MSG_BOOTLOADER_MSG_GROUP) {
+        else if (cm.source_id == dst_id && (cm.type & H9MSG_BOOTLOADER_MSG_TYPE_GROUP_MASK) == H9MSG_BOOTLOADER_MSG_TYPE_GROUP) {
             cm_res.type = H9MSG_TYPE_PAGE_FILL_BREAK;
             cm_res.dlc = 0;
 
@@ -109,7 +109,7 @@ int main(void) {
     turn_on_msg.type = H9MSG_TYPE_BOOTLOADER_TURNED_ON;
     turn_on_msg.priority = H9MSG_PRIORITY_HIGH;
     turn_on_msg.source_id = can_node_id;
-    turn_on_msg.destination_id = H9MSG_BROADCAST_ID;
+    turn_on_msg.destination_id = ((1 << H9MSG_ID_BIT_LENGTH) - 1);
     turn_on_msg.seqnum = seqnum++;
 //    turn_on_msg.dlc = 5;
     turn_on_msg.dlc = 4;
@@ -164,7 +164,7 @@ int main(void) {
             }
             if (cm.type == H9MSG_TYPE_QUIT_BOOTLOADER && cm.dlc == 0) {
                 MCUCR &= ~(1 << IVSEL);
-                asm volatile ("jmp  0x0000");
+                __asm__ volatile ("jmp  0x0000");
             }
         }
         else {

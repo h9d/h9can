@@ -47,8 +47,8 @@ void CAN_init(void) {
 
     // 1st msg filter
     CANPAGE = 0x01 << MOBNB0;
-    set_CAN_id(0, H9MSG_BOOTLOADER_MSG_GROUP, 0, can_node_id, 0);
-    set_CAN_id_mask(0, H9MSG_BOOTLOADER_MSG_GROUP_MASK, 0, (1<<H9MSG_ID_BIT_LENGTH)-1, 0);
+    set_CAN_id(0, H9MSG_BOOTLOADER_MSG_TYPE_GROUP, 0, can_node_id, 0);
+    set_CAN_id_mask(0, H9MSG_BOOTLOADER_MSG_TYPE_GROUP_MASK, 0, H9MSG_ID_MASK, 0);
     CANIDM4 |= 1 << IDEMSK;
     CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob, 29-bit only
 
@@ -107,13 +107,13 @@ uint8_t CAN_get_msg_blocking(h9msg_t *cm) {
 
 
 void read_node_id(void) {
-    uint16_t node_id = eeprom_read_word(&ee_node_id);
-    if (node_id > 0 && node_id < H9MSG_BROADCAST_ID) {
-        can_node_id = node_id & ((1<<H9MSG_ID_BIT_LENGTH)-1);
-    }
-    else {
-        can_node_id = 0;
-    }
+    can_node_id = eeprom_read_word(&ee_node_id);
+    // if (node_id > 0 && node_id < H9MSG_BROADCAST_ID) {
+    //     can_node_id = node_id & ((1<<H9MSG_ID_BIT_LENGTH)-1);
+    // }
+    // else {
+    //     can_node_id = 0;
+    // }
 }
 
 
