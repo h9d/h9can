@@ -9,6 +9,7 @@
 #include <string.h>
 #include "h9pic/can.h"
 #include "h9pic/ee_mem.h"
+#include "h9pic/bl_info.h"
 #include "h9frame.h"
 #include "h9def.h"
 
@@ -175,13 +176,12 @@ uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint8_t pcb_rev, uint8_
     }
 
     node_info.flags.default_id = !ret;
-    // bootloader present if its first instruction is programmed (erased flash reads 0xFF);
-    // the PIC bootloader has no info block, so NODE_FLAG_BL_MISMATCH is not reported
-    TBLPTRU = (uint8_t)((uint32_t)BOOTLOADER_ADDR >> 16);
-    TBLPTRH = (uint8_t)(BOOTLOADER_ADDR >> 8);
-    TBLPTRL = (uint8_t)BOOTLOADER_ADDR;
-    asm("TBLRD*");
-    node_info.flags.bl_present = TABLAT != 0xff;
+
+    h9_bl_info_t bl;
+    if (read_bl_info(&bl)) {
+        node_info.flags.bl_present = 1;
+        node_info.flags.bl_mismatch = bl.node_type != node_type || bl.pcb_rev != pcb_rev || bl.bom_rev != bom_rev;
+    }
     TRISBbits.TRISB2 = 1; //CANTX ax output
     TRISBbits.TRISB3 = 1; //CANRX ax input
     

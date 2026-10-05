@@ -10,8 +10,24 @@
 #include "config.h"
 #include <xc.h>
 #include "can.h"
+#include <h9pic/bl_info.h>
 
 #include "version.h"
+
+// version packed into 32 bits: major (10 bits) | minor (11 bits) | patch (11 bits)
+#if VERSION_MAJOR > 0x3ff || VERSION_MINOR > 0x7ff || VERSION_PATCH > 0x7ff
+#error "Bootloader version out of range (major 0-1023, minor/patch 0-2047)"
+#endif
+#define BOOTLOADER_VERSION_PACKED (((uint32_t)VERSION_MAJOR << 22) | ((uint32_t)VERSION_MINOR << 11) | (uint32_t)VERSION_PATCH)
+
+// info block at the end of flash, read by the application (see h9pic/bl_info.h)
+const h9_bl_info_t bl_info __at(H9_BL_INFO_ADDR) = {
+    .magic     = H9_BL_INFO_MAGIC,
+    .node_type = NODE_TYPE,
+    .pcb_rev   = PCB_REVISION,
+    .bom_rev   = BOM_REVISION,
+    .version   = BOOTLOADER_VERSION_PACKED,
+};
 
 #define FLASH_BLOCK_SIZE 64
 
@@ -78,6 +94,7 @@ void write_block(uint16_t block, uint8_t dst_id) {
         }
         else if (cm.source_id == dst_id && (cm.type & H9FRAME_BOOTLOADER_MSG_TYPE_GROUP_MASK) == H9FRAME_BOOTLOADER_MSG_TYPE_GROUP) {
             cm_res.type = H9FRAME_TYPE_PAGE_FILL_BREAK;
+            cm_res.dlc = 0;
 
             CAN_put_msg_blocking(&cm_res);
             break;
@@ -96,11 +113,8 @@ void main(void) {
     turn_on_msg.broadcast.group = NODE_TYPE;
     turn_on_msg.dlc = 8;
 
-    // version packed big-endian into 32 bits: major (10 bits) | minor (11 bits) | patch (11 bits)
-#if VERSION_MAJOR > 0x3ff || VERSION_MINOR > 0x7ff || VERSION_PATCH > 0x7ff
-#error "Bootloader version out of range (major 0-1023, minor/patch 0-2047)"
-#endif
-    const uint32_t version = ((uint32_t)VERSION_MAJOR << 22) | ((uint32_t)VERSION_MINOR << 11) | (uint32_t)VERSION_PATCH;
+    // version big-endian
+    const uint32_t version = BOOTLOADER_VERSION_PACKED;
     turn_on_msg.data[0] = (version >> 24) & 0xff;
     turn_on_msg.data[1] = (version >> 16) & 0xff;
     turn_on_msg.data[2] = (version >> 8) & 0xff;

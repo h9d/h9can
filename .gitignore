@@ -17,3 +17,5 @@ CMakeCache.txt
 cmake_install.cmake
 Makefile
 config.h
+# pic_bootloader/config.h to zrodlo (#pragma config), nie plik generowany
+!pic_bootloader/config.h

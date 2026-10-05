@@ -56,13 +56,14 @@ REG_VALUE data: [0x00, flags_hi, flags_lo]
 
 Bits 0–5 are set at start in `CAN_init()`; bits 6–8 are sticky and set at runtime.
 
-Bootloader detection:
-- **AVR** — the bootloader info block at the end of flash (`h9avr/bl_info.h`):
-  bit 3 is set when the block is valid, bit 4 when its node type / PCB / BOM revision
-  differ from the values passed to `CAN_init()`. A bootloader without the block
-  (older version) is reported as not present.
-- **PIC** — bit 3 is set when the bootloader area (0xF600) is programmed. Bit 4 is
-  not reported (the PIC bootloader has no info block).
+Bootloader detection: the bootloader info block at the end of flash
+(`h9avr/bl_info.h`, `h9pic/bl_info.h` — same 10-byte layout): bit 3 is set when the
+block is valid, bit 4 when its node type / PCB / BOM revision differ from the values
+passed to `CAN_init()`. A bootloader without the block (older version) is reported
+as not present.
+- **AVR** — block at `FLASHEND + 1 - 10`; not readable when the boot section is read locked (BLB1x).
+- **PIC** — block at `_ROMSIZE - 10` (PIC18F46K80: 0xFFF6, inside the bootloader area
+  0xF600-0xFFFF); not readable when table reads of that block are protected (EBTR3).
 
 Reset reason (bits 0–2):
 
