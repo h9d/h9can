@@ -300,10 +300,12 @@ The library permanently occupies three hardware message objects (MObs):
 
 | Value | Constant                              | Meaning                                      |
 |-------|---------------------------------------|----------------------------------------------|
-| 1     | `H9FRAME_ERROR_INVALID_MSG`           | Message type not valid in current node state |
-| 2     | `H9FRAME_ERROR_BOOTLOADER_UNSUPPORTED`| NODE_UPGRADE requested, no bootloader linked |
+| 1     | `H9FRAME_ERROR_INVALID_FRAME`         | Invalid frame / message type not valid here  |
+| 2     | `H9FRAME_ERROR_BOOTLOADER_UNSUPPORTED`| NODE_UPGRADE requested but no bootloader     |
 | 3     | `H9FRAME_ERROR_UNSUPPORTED_OPERATION` | Operation not supported for this register    |
-| 4     | `H9FRAME_ERROR_INVALID_REGISTER`      | Register number unknown                      |
-| 5     | `H9FRAME_ERROR_READ_ONLY_REGISTER`    | Write attempted on a read-only register      |
-| 6     | `H9FRAME_ERROR_WRITE_ONLY_REGISTER`   | Read attempted on a write-only register      |
-| 7     | `H9FRAME_ERROR_REGISTER_SIZE_MISMATCH`| Wrong payload length for this register       |
+| 4     | `H9FRAME_ERROR_UNSUPPORTED_REGISTER`  | Register not supported by this node          |
+| 5     | `H9FRAME_ERROR_INVALID_REGISTER`      | Register number unknown                      |
+| 6     | `H9FRAME_ERROR_READ_ONLY_REGISTER`    | Attempted write to a read-only register      |
+| 7     | `H9FRAME_ERROR_WRITE_ONLY_REGISTER`   | Attempted read from a write-only register    |
+| 8     | `H9FRAME_ERROR_REGISTER_SIZE_MISMATCH`| Wrong number of data bytes for this register |
+| 9     | `H9FRAME_ERROR_INVALID_VALUE`         | Value out of the allowed range               |

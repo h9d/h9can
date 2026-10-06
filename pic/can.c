@@ -8,7 +8,7 @@
 
 #include <string.h>
 #include "h9pic/can.h"
-#include "h9pic/ee_mem.h"
+#include "h9pic/node_id.h"
 #include "h9pic/bl_info.h"
 #include "h9frame.h"
 #include "h9def.h"
@@ -169,8 +169,9 @@ uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint8_t pcb_rev, uint8_
     node_info.version_patch = version_patch;
     strncpy(node_info.build_info, build_info, H9FRAME_MAX_REGISTER_SIZE);
     
-    node_info.node_id = read_node_id_and_refresh();
-    if (node_info.node_id == 0xff) {    // no valid id in EEPROM
+    node_id_repair();          // restore a damaged EEPROM copy of the node id (writes only if needed)
+    node_info.node_id = read_node_id();
+    if (node_info.node_id == 0) {       // no valid id in EEPROM
         node_info.node_id = default_id;
         ret = 0;
     }

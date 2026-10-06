@@ -117,6 +117,7 @@ uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint8_t pcb_rev, uint8_
     node_info.version_patch = version_patch;
     strncpy(node_info.build_info, build_info, H9FRAME_MAX_REGISTER_SIZE);
 
+    node_id_repair();          // restore a damaged EEPROM copy of the node id (writes only if needed)
     can_node_id = read_node_id();
     if (can_node_id == 0) {    // no valid id in EEPROM
         can_node_id = default_id;
@@ -617,10 +618,12 @@ static void process_standard_reg(h9frame_t *cm) {
                 return;
             case NODE_ID_STD_REGISTER:
                 if (cm->dlc == 2) {
-                    uint8_t sreg = SREG;
-                    cli();
+                    if (cm->data[1] == 0 || cm->data[1] == 0xff) {     // 0 = no id (default id is used), 0xff reserved
+                        send_command_error(H9FRAME_ERROR_INVALID_VALUE, cm->source_id, cm->unicast.seqnum);
+                        return;
+                    }
+                    // takes ~25 ms (EEPROM writes); avr-libc disables interrupts only for the EEPE timed sequence
                     write_node_id(cm->data[1], node_info.node_type);
-                    SREG = sreg;
 
                     send_reg_value1(NODE_ID_STD_REGISTER, cm->source_id, cm->unicast.seqnum, can_node_id);
                     return;

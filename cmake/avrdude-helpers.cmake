@@ -27,7 +27,7 @@ if (AVRDUDE)
     elseif (AVR_MCU STREQUAL atmega16m1)
         set(FUSE -U lfuse:w:0xf4:m -U hfuse:w:0xd3:m -U efuse:w:0xfe:m)
     elseif (AVR_MCU STREQUAL at90can128)
-        set(FUSE -U lfuse:w:0xde:m -U hfuse:w:0xdd:m -U efuse:w:0xfd:m)
+        set(FUSE -U lfuse:w:0xde:m -U hfuse:w:0xd5:m -U efuse:w:0xfd:m)    # hfuse: EESAVE programmed (EEPROM kept on chip erase)
     endif ()
 
     set(_APP_HEX $<TARGET_FILE_DIR:${PROJECT_NAME}>/$<TARGET_FILE_BASE_NAME:${PROJECT_NAME}>.hex)

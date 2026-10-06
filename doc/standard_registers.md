@@ -186,25 +186,41 @@ Reserved for on-chip temperature sensor.
 
 ### Register 9 — NODE_ID
 
-Read/write. The node's 9-bit CAN address (valid range 0–511).
+Read/write. The node's 8-bit CAN address, valid range 1–254.
 
 **GET:**
 ```
 GET_REG   data: [0x09]
-REG_VALUE data: [0x09, id_hi, id_lo]
+REG_VALUE data: [0x09, id]
 ```
-`id_hi` = bit 8 (0 or 1); `id_lo` = bits 7–0.
 
 **SET:**
 ```
-SET_REG   data: [0x09, id_hi, id_lo]    dlc = 3
-REG_VALUE data: [0x09, id_hi, id_lo]   (echoes the value currently active)
+SET_REG   data: [0x09, id]    dlc = 2
+REG_VALUE data: [0x09, id]    (echoes the id currently active)
 ```
 
 The new ID is written to EEPROM immediately and takes effect after the next
 reset. The response echoes the **current** (pre-reset) node ID, not the new one.
 
-Wrong `dlc` (not 3) returns `COMMAND_ERROR` / `H9FRAME_ERROR_REGISTER_SIZE_MISMATCH`.
+- Wrong `dlc` (not 2) returns `COMMAND_ERROR` / `H9FRAME_ERROR_REGISTER_SIZE_MISMATCH`.
+- ID 0 or 0xFF returns `COMMAND_ERROR` / `H9FRAME_ERROR_INVALID_VALUE`
+  (0 means "no ID stored", the node then starts with the default ID).
+
+EEPROM storage (AVR, `h9avr/node_id.h`): two independent copies, each a ring of
+10 blocks (0x10–0x5F and 0x80–0xCF; address 0 is left unused, it is the most exposed
+to corruption on brown-out). Each 8-byte block (two whole EEPROM pages) holds a
+sequence number and a CRC; the valid block with the newest sequence number from
+either copy is used, so an interrupted write or a damaged EEPROM page never loses
+the ID. `CAN_init()` restores a damaged copy from the good one (EEPROM is written
+only when a copy needs repair).
+
+EEPROM storage (PIC, `pic/ee_mem.c`): 16 interleaved sectors at 0x100–0x17F (0x00–0x7F
+is left unused). Every write stores the ID in two sectors (consecutive counters) and
+invalidates all other sectors; the valid sector with the newest counter is used.
+`CAN_init()` (`read_node_id_and_refresh()`) rewrites both copies only if one is missing
+or damaged, or stale sectors are left. The same mechanism stores application data
+at `USER_BASE` (0x80).
 
 ---
 
@@ -212,10 +228,12 @@ Wrong `dlc` (not 3) returns `COMMAND_ERROR` / `H9FRAME_ERROR_REGISTER_SIZE_MISMA
 
 | Code | Constant                              | Meaning                                      |
 |------|---------------------------------------|----------------------------------------------|
-| 1    | `H9FRAME_ERROR_INVALID_MSG`           | Message type not valid for this node state   |
+| 1    | `H9FRAME_ERROR_INVALID_FRAME`         | Invalid frame / message type not valid here  |
 | 2    | `H9FRAME_ERROR_BOOTLOADER_UNSUPPORTED`| NODE_UPGRADE requested but no bootloader     |
 | 3    | `H9FRAME_ERROR_UNSUPPORTED_OPERATION` | Operation not supported for this register    |
-| 4    | `H9FRAME_ERROR_INVALID_REGISTER`      | Register number unknown                      |
-| 5    | `H9FRAME_ERROR_READ_ONLY_REGISTER`    | Attempted write to a read-only register      |
-| 6    | `H9FRAME_ERROR_WRITE_ONLY_REGISTER`   | Attempted read from a write-only register    |
-| 7    | `H9FRAME_ERROR_REGISTER_SIZE_MISMATCH`| Wrong number of data bytes for this register |
+| 4    | `H9FRAME_ERROR_UNSUPPORTED_REGISTER`  | Register not supported by this node          |
+| 5    | `H9FRAME_ERROR_INVALID_REGISTER`      | Register number unknown                      |
+| 6    | `H9FRAME_ERROR_READ_ONLY_REGISTER`    | Attempted write to a read-only register      |
+| 7    | `H9FRAME_ERROR_WRITE_ONLY_REGISTER`   | Attempted read from a write-only register    |
+| 8    | `H9FRAME_ERROR_REGISTER_SIZE_MISMATCH`| Wrong number of data bytes for this register |
+| 9    | `H9FRAME_ERROR_INVALID_VALUE`         | Value out of the allowed range               |

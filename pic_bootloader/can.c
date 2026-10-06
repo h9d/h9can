@@ -10,7 +10,7 @@
 #include "config.h"
 
 #include <h9pic/common.h>
-#include <h9pic/ee_mem.h>
+#include <h9pic/node_id.h>
 
 uint8_t can_node_id = 255;
 

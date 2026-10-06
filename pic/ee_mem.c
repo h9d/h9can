@@ -34,6 +34,12 @@ static uint8_t eeprom_read_byte(uint16_t addr) {
     return (EEDATA);
 }
 
+// write only if the value changes (less wear)
+static void eeprom_update_byte(uint16_t addr, uint8_t data) {
+    if (eeprom_read_byte(addr) != data)
+        eeprom_write_byte(addr, data);
+}
+
 ////CRC-8/MAXIM
 //static uint8_t crc8_update(uint8_t crc, uint8_t byte) {
 //    crc ^= byte;
@@ -145,13 +151,13 @@ static uint8_t write_sector_and_verify(uint16_t addr, uint8_t counter, uint8_t *
     //write
     uint16_t crc = crc16_sum(counter, data, size);
     
-    eeprom_write_byte(addr + 0, MAGIC_BYTE);
-    eeprom_write_byte(addr + 1, counter);
+    eeprom_update_byte(addr + 0, MAGIC_BYTE);
+    eeprom_update_byte(addr + 1, counter);
     for (uint8_t i =0; i < size; ++i) {
-        eeprom_write_byte(addr + 2 + i, data[i]);
+        eeprom_update_byte(addr + 2 + i, data[i]);
     }
-    eeprom_write_byte(addr + 2 + size, (uint8_t)(crc >> 8));
-    eeprom_write_byte(addr + 3 + size, (uint8_t)(crc));
+    eeprom_update_byte(addr + 2 + size, (uint8_t)(crc >> 8));
+    eeprom_update_byte(addr + 3 + size, (uint8_t)(crc));
     
     //verify
     if (eeprom_read_byte(addr) != MAGIC_BYTE) return 0;
@@ -164,139 +170,101 @@ static uint8_t write_sector_and_verify(uint16_t addr, uint8_t counter, uint8_t *
     return 1;
 }
 
-static inline void refresh_bad_sector(uint16_t addr_base, uint8_t counter, uint8_t *data, uint8_t size) {
-    uint8_t tmp_counter;
+/*
+ * Every value (node id, user data) is kept in SECTOR_NUMBER sectors at addr_base. A write stores the value
+ * twice (two sectors, counters n and n + 1) and then invalidates all other sectors, so exactly two valid
+ * copies of the newest value exist. Reading picks the valid sector (magic + CRC) with the newest counter;
+ * read_data_and_refresh() rewrites the two copies only if one of them is missing / damaged or stale
+ * sectors are left (e.g. power loss during a write), a healthy memory is never written at start.
+ */
+
+// newest valid sector: returns its index (or -1 if none) and its counter; valid_count = all valid sectors
+static int8_t find_newest_sector(uint16_t addr_base, uint8_t size, uint8_t *counter, uint8_t *valid_count) {
+    int8_t newest = -1;
+    uint8_t valid = 0;
 
     for (uint8_t i = 0; i < SECTOR_NUMBER; ++i) {
-        if (!read_sector(SECTOR_ADDRES(addr_base, i, size), &tmp_counter, NULL, size)) {
-            if (write_sector_and_verify(SECTOR_ADDRES(addr_base, i, size), counter + 1, data, size))
-                break;
-        }
-    }
-}
-
-static uint8_t read_data(uint16_t addr_base, uint8_t *data, uint8_t size) {
-    uint8_t max_counter;
-    uint8_t max_idx;
-    
-    uint8_t i = 0;
-    for (; i < SECTOR_NUMBER; ++i) {
-        if (read_sector(SECTOR_ADDRES(addr_base, i, size), &max_counter, NULL, size)) {
-            max_idx = i;
-            break;
-        }
-    }
-
-    if (i < SECTOR_NUMBER) {
-        i++;
-        for (; i < SECTOR_NUMBER; ++i) {
-            uint8_t tmp_counter;
-            if (read_sector(SECTOR_ADDRES(addr_base, i, size), &tmp_counter, NULL, size)) {
-                if (cyclic_counter_great(tmp_counter, max_counter)) {
-                    max_counter = tmp_counter;
-                    max_idx = i;
-                }
+        uint8_t tmp_counter;
+        if (read_sector(SECTOR_ADDRES(addr_base, i, size), &tmp_counter, NULL, size)) {
+            valid++;
+            if (newest < 0 || cyclic_counter_great(tmp_counter, *counter)) {
+                *counter = tmp_counter;
+                newest = (int8_t)i;
             }
         }
-        
-        if (read_sector(SECTOR_ADDRES(addr_base, max_idx, size), &max_counter, data, size)) { 
-            return 1;
-        }
     }
 
-    return 0; //pamiec pusta
+    *valid_count = valid;
+    return newest;
+}
+
+uint8_t read_data(uint16_t addr_base, uint8_t *data, uint8_t size) {
+    uint8_t counter;
+    uint8_t valid;
+    int8_t newest = find_newest_sector(addr_base, size, &counter, &valid);
+
+    if (newest < 0)
+        return 0; //pamiec pusta
+
+    return read_sector(SECTOR_ADDRES(addr_base, (uint8_t)newest, size), &counter, data, size);
 }
 
 uint8_t read_data_and_refresh(uint16_t addr_base, uint8_t *data, uint8_t size) {
-    uint8_t max_counter;
-    uint8_t max_idx;
-    
-    uint8_t i = 0;
-    uint8_t error_cell_count = 0;
-    for (; i < SECTOR_NUMBER; ++i) {
-        if (read_sector(SECTOR_ADDRES(addr_base, i, size), &max_counter, NULL, size)) {
-            max_idx = i;
-            break;
-        }
-        error_cell_count++;
-    }
+    uint8_t counter;
+    uint8_t valid;
+    int8_t newest = find_newest_sector(addr_base, size, &counter, &valid);
 
-    if (i < SECTOR_NUMBER) {
-        i++;
-        for (; i < SECTOR_NUMBER; ++i) {
+    if (newest < 0 || !read_sector(SECTOR_ADDRES(addr_base, (uint8_t)newest, size), &counter, data, size))
+        return 0; //pamiec pusta
+
+    // healthy: exactly two valid sectors, the second one holds the same data with counter - 1
+    uint8_t healthy = 0;
+    if (valid == 2) {
+        uint16_t newest_addr = SECTOR_ADDRES(addr_base, (uint8_t)newest, size);
+        for (uint8_t i = 0; i < SECTOR_NUMBER; ++i) {
+            uint16_t addr = SECTOR_ADDRES(addr_base, i, size);
             uint8_t tmp_counter;
-            if (read_sector(SECTOR_ADDRES(addr_base, i, size), &tmp_counter, NULL, size)) {
-                if (cyclic_counter_great(tmp_counter, max_counter)) {
-                    max_counter = tmp_counter;
-                    max_idx = i;
+            if (i == (uint8_t)newest || !read_sector(addr, &tmp_counter, NULL, size))
+                continue;
+            if (tmp_counter == (uint8_t)(counter - 1)) {
+                healthy = 1;
+                for (uint8_t k = 0; k < size; ++k) {
+                    if (eeprom_read_byte(addr + 2 + k) != eeprom_read_byte(newest_addr + 2 + k))
+                        healthy = 0;
                 }
             }
-            else {
-                error_cell_count++;
-            }
-        }
-        
-        if (read_sector(SECTOR_ADDRES(addr_base, max_idx, size), &max_counter, data, size)) { 
-            if (error_cell_count) {
-                refresh_bad_sector(addr_base, max_counter, data, size);
-            }
-            return 1;
         }
     }
 
-    return 0; //pamiec pusta
+    if (!healthy)
+        write_data(addr_base, data, size);
+
+    return 1;
 }
 
 void write_data(uint16_t addr_base, uint8_t *data, uint8_t size) {
-    uint8_t max_counter;
-    int max_idx = -1;
-    int i = 0;
-    for (; i < SECTOR_NUMBER; ++i) {
-        if (read_sector(SECTOR_ADDRES(addr_base, i, size), &max_counter, NULL, size)) {
-            max_idx = i;
-            break;
+    uint8_t counter;
+    uint8_t valid;
+    int8_t newest = find_newest_sector(addr_base, size, &counter, &valid);
+    uint8_t next_counter = newest < 0 ? 0 : (uint8_t)(counter + 1);
+
+    // two copies in the next sectors after the newest one (skipping sectors that fail verification)
+    uint8_t written[2];
+    uint8_t copies = 0;
+    for (uint8_t j = 0; j < SECTOR_NUMBER && copies < 2; ++j) {
+        uint8_t idx = (uint8_t)((uint8_t)(newest + 1 + j) % SECTOR_NUMBER);     // newest >= -1
+        if (write_sector_and_verify(SECTOR_ADDRES(addr_base, idx, size), next_counter, data, size)) {
+            written[copies++] = idx;
+            next_counter++;
         }
     }
-    if (i < SECTOR_NUMBER) {
-        i++;
-        for (; i < SECTOR_NUMBER; ++i) {
-            uint8_t tmp_counter;
-            if (read_sector(SECTOR_ADDRES(addr_base, i, size), &tmp_counter, NULL, size)) {
-                if (cyclic_counter_great(tmp_counter, max_counter)) {
-                    max_counter = tmp_counter;
-                    max_idx = i;
-                }
-            }
+
+    // invalidate all other (stale) sectors, only when both copies are in place
+    if (copies == 2) {
+        for (uint8_t i = 0; i < SECTOR_NUMBER; ++i) {
+            uint16_t addr = SECTOR_ADDRES(addr_base, i, size);
+            if (i != written[0] && i != written[1] && eeprom_read_byte(addr) == MAGIC_BYTE)
+                eeprom_write_byte(addr, 0x00);
         }
     }
-    int j = 0;
-    for (; j < SECTOR_NUMBER; ++j) {
-        
-        if (write_sector_and_verify(SECTOR_ADDRES(addr_base, max_idx + 1 + j, size), (max_idx > -1) ? max_counter + 1 : 0, data,  size))
-            break;
-    }
-
-    j++;
-    for (; j < SECTOR_NUMBER; ++j) {
-        if (write_sector_and_verify(SECTOR_ADDRES(addr_base, max_idx + 1 + j, size), (max_idx > -1) ? max_counter + 2 : 1, data,  size))
-            break;
-    }
-}
-
-uint8_t read_node_id(void) {
-    uint8_t id;
-    if (read_data(0, &id, sizeof(uint8_t)))
-        return id;
-    return 0xff;
-}
-
-uint8_t read_node_id_and_refresh(void){
-    uint8_t id;
-    if (read_data_and_refresh(0, &id, sizeof(uint8_t)))
-        return id;
-    return 0xff;
-}
-
-void write_node_id(uint8_t id) {
-    write_data(0, &id, sizeof(uint8_t));
 }
