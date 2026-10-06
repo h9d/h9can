@@ -7,6 +7,13 @@ include(CMakeDependentOption)
 set(AVR_MCU            "atmega32m1"  CACHE STRING "Target AVR MCU (e.g. atmega64m1, atmega32c1, at90can128)")
 set(AVR_F_CPU          "12000000"    CACHE STRING "CPU frequency in Hz (e.g. 4000000, 12000000 or 16000000)")
 
+# ---------------------------------------------------------------------------
+# Node identity: passed to the application (CAN_init) and compiled into the bootloader
+# ---------------------------------------------------------------------------
+set(NODE_TYPE    0)     # see h9can/doc/nodes.md
+set(PCB_REVISION A)     # letter A-Z
+set(BOM_REVISION 0)
+
 # avrdude settings
 set(AVRDUDE_PROGRAMMER "jtag3isp"    CACHE STRING "avrdude programmer (-c), e.g. jtag3isp, usbasp, stk500v2, avrispmkii")
 set(AVRDUDE_PORT       "usb"         CACHE STRING "avrdude port (-P), e.g. /dev/ttyUSB0, COM3")

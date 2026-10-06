@@ -29,7 +29,7 @@ enum {
     H9FRAME_TYPE_NODE_UPGRADE =  14,
     H9FRAME_TYPE_NODE_RESET =  15,
 
-    /* --- SPECIAL BROADCAST --- */
+    /* --- SPECIAL BROADCAST (TO GROUP NOT FROM)--- */
     H9FRAME_TYPE_DISCOVER = 16,
     H9FRAME_TYPE_GROUP_RESET = 17,
 
@@ -88,22 +88,32 @@ enum {
 };
 
 enum {
-    NODE_TYPE_STD_REGISTER = 0,
+    NODE_FLAGS_STD_REGISTER = 0,
+    NODE_TYPE_STD_REGISTER,
     NODE_HARDWARE_REVISION_STD_REGISTER,
     NODE_VERSION_STD_REGISTER,
     NODE_BUILD_INFO_STD_REGISTER,
     NODE_MCU_TYPE_STD_REGISTER,
     NODE_SN_STD_REGISTER,
-    NODE_RESET_REASON_STD_REGISTER,
     NODE_POWER_SUPPLY_STD_REGISTER,
     NODE_MCU_TEMP_STD_REGISTER,
     NODE_ID_STD_REGISTER,
     NODE_STD_REGISTER_LAST
 };
 
+/* Node flags: NODE_FLAGS_STD_REGISTER and data[6..7] of NODE_INFO / NODE_TURNED_ON (16-bit, big-endian) */
+#define NODE_FLAG_RESET_REASON_MASK     0x0007      // bits 0-2: NODE_RESET_BY_*
+#define NODE_FLAG_BL_PRESENT            0x0008      // bootloader present
+#define NODE_FLAG_BL_MISMATCH           0x0010      // bootloader built for another node type / PCB / BOM revision
+#define NODE_FLAG_DEFAULT_ID            0x0020      // no node id in EEPROM, default id used
+#define NODE_FLAG_CAN_ERROR_WARNING     0x0040      // CAN error warning / passive / bus off occurred since start
+#define NODE_FLAG_CAN_TX_FRAME_LOSS     0x0080      // CAN frame not sent (TX queue full on bus passive / bus off) since start
+#define NODE_FLAG_CAN_RX_FRAME_LOSS     0x0100      // received CAN frame dropped (receive buffer overflow) since start
+
 enum {
     NODE_FAULT_POWER_OUTAGE = 1,
-    NODE_FAULT_CAN_FRAME_LOSS,
+    NODE_FAULT_CAN_FRAME_LOSS,          // TX frame dropped (bus passive / bus off)
+    NODE_FAULT_CAN_RX_FRAME_LOSS,       // RX frame dropped (receive buffer overflow)
     NODE_FAULT_NODE_SPECIFIC_FIRST_FAULT
 };
 
@@ -115,7 +125,8 @@ enum {
     H9FRAME_ERROR_INVALID_REGISTER,
     H9FRAME_ERROR_READ_ONLY_REGISTER,
     H9FRAME_ERROR_WRITE_ONLY_REGISTER,
-    H9FRAME_ERROR_REGISTER_SIZE_MISMATCH
+    H9FRAME_ERROR_REGISTER_SIZE_MISMATCH,
+    H9FRAME_ERROR_INVALID_VALUE             // value out of the allowed range for this register
 };
 
 enum {

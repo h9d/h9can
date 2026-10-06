@@ -10,7 +10,7 @@
 #include "config.h"
 
 #include <h9pic/common.h>
-#include <h9pic/ee_mem.h>
+#include <h9pic/node_id.h>
 
 uint8_t can_node_id = 255;
 
@@ -58,7 +58,6 @@ void CAN_put_msg_blocking(h9frame_t *cm) {
     cm->source_id = can_node_id;
     
     if (cm->type & H9FRAME_UNICAST_BROADCAST_BIT) {
-        cm->broadcast.group = H9FRAME_BROADCAST_BOOTLOADER_GROUP;
         calc_can_broadcast_id(&TXB0SIDH, &TXB0SIDL, &TXB0EIDH, &TXB0EIDL, cm->type, cm->source_id, cm->broadcast.group);
     }
     else

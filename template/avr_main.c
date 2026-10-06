@@ -12,8 +12,6 @@
 
 #include "version.h"
 
-#define NODE_TYPE 0
-
 static void can_proc(void);
 
 int main(void) {
@@ -22,7 +20,8 @@ int main(void) {
 	DDRD = 0xff;
 	DDRE = 0xff;
 
-	CAN_init(NODE_TYPE, 'a', VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, APP_VERSION);
+	// NODE_TYPE, PCB_REVISION, BOM_REVISION are defined in CMakeLists.txt
+	CAN_init(NODE_TYPE, 0xff - NODE_TYPE, PCB_REVISION, BOM_REVISION, VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, APP_VERSION);
 
 	sei();
 

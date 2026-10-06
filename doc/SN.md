@@ -1,7 +1,7 @@
 ## PIC Serial number
 
 Numer seryjny wpisujemy do User ID memory jak ponizej, jest tam 8 bajtow.
-Zerowy (0x200000) rezerwujemy na hardware version, sn jest od 1 (0x200001).
+Zerowy (0x200000) jest zarezerwowany (dawniej hardware version, teraz rewizja PCB/BOM jest przekazywana do `CAN_init()`), sn jest od 1 (0x200001).
 
 ```
 cat >> id.hex << EOF 

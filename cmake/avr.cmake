@@ -3,6 +3,16 @@ cmake_minimum_required(VERSION 3.21)
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})
 set_target_properties(${PROJECT_NAME} PROPERTIES SUFFIX ".elf")
 
+# Node identity (NODE_TYPE, PCB_REVISION, BOM_REVISION set by the project): passed to the application
+# for CAN_init() and compiled into the bootloader (avr_bootloader)
+if (DEFINED NODE_TYPE AND DEFINED PCB_REVISION AND DEFINED BOM_REVISION)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+            NODE_TYPE=${NODE_TYPE}
+            PCB_REVISION='${PCB_REVISION}'
+            BOM_REVISION=${BOM_REVISION}
+    )
+endif ()
+
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/src/")
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../include")
 

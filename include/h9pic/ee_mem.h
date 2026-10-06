@@ -11,16 +11,14 @@
 //} node_can_setting_t;
 
 #define MAGIC_BYTE       0xA5
-#define SECTOR_NUMBER    16u
-#define USER_BASE        0x80
+#define SECTOR_NUMBER    16u        // must be 16: SECTOR_ADDRES interleaves sectors with (offset * 3) & 0x0f
+#define USER_BASE        0x80       // application data (0x80-...), node id: h9pic/node_id.h
 
-uint8_t read_node_id(void);
-uint8_t read_node_id_and_refresh(void);
-void write_node_id(uint8_t id);
 
 //void eeprom_write_byte(uint16_t addr, uint8_t data);
 //uint8_t eeprom_read_byte(uint16_t addr);
 
+uint8_t read_data(uint16_t addr_base, uint8_t *data, uint8_t size);
 uint8_t read_data_and_refresh(uint16_t addr_base, uint8_t *data, uint8_t size);
 void write_data(uint16_t addr_base, uint8_t *data, uint8_t size);
 

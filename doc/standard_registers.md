@@ -1,192 +1,254 @@
 # H9 Standard Node Registers
 
-Every H9 node implements a set of standard registers (0–9) handled automatically
-by the `can.c` library. Registers numbered 10 and above are application-specific
-and passed to the application unchanged.
+Every H9 node implements the standard registers 0–9; they are handled by the h9can library
+inside `CAN_get_msg()`. Registers 10 and above belong to the application (see
+[Application registers](#application-registers--10)).
 
-## Access model
-
-Registers are accessed via unicast CAN messages directed to the node's ID:
-
-| Operation | Message type       | Frame format                                    |
-|-----------|--------------------|-------------------------------------------------|
-| Read      | `GET_REG` (0x0A)   | `data[0]` = register number; `dlc` = 1          |
-| Write     | `SET_REG` (0x09)   | `data[0]` = register number; `data[1..]` = value |
-
-The node replies with `REG_VALUE` (0x0F): `data[0]` = register number, `data[1..]` = value.  
-On error the node replies with `COMMAND_ERROR` (0x08): `data[0]` = error code.
-
-## Standard registers
-
-| # | Constant                         | Access | Size    | Description                     |
-|---|----------------------------------|--------|---------|---------------------------------|
-| 0 | `NODE_TYPE_STD_REGISTER`         | R      | 2 bytes | Node type                       |
-| 1 | `NODE_HARDWARE_REVISION_STD_REGISTER` | R | 1 byte  | Hardware revision letter        |
-| 2 | `NODE_VERSION_STD_REGISTER`      | R      | 4 bytes | Firmware version (major, minor) |
-| 3 | `NODE_BUILD_INFO_STD_REGISTER`   | R      | ≤7 bytes| Build info string               |
-| 4 | `NODE_MCU_TYPE_STD_REGISTER`     | R      | 1 byte  | MCU type enum                   |
-| 5 | `NODE_SN_STD_REGISTER`           | R      | 4 bytes | Serial number                   |
-| 6 | `NODE_RESET_REASON_STD_REGISTER` | R      | 1 byte  | Reason for last reset           |
-| 7 | `NODE_POWER_SUPPLY_STD_REGISTER` | —      | —       | Not implemented                 |
-| 8 | `NODE_MCU_TEMP_STD_REGISTER`     | —      | —       | Not implemented                 |
-| 9 | `NODE_ID_STD_REGISTER`           | R/W    | 2 bytes | Node ID (9-bit)                 |
+Frame formats are described in [`protocol.md`](protocol.md).
 
 ---
 
-### Register 0 — NODE_TYPE
+## Access
 
-Read-only. Returns the 16-bit node type passed to `CAN_init()`.
+Registers are accessed with unicast frames sent to the node ID:
 
-```
-GET_REG  data: [0x00]
-REG_VALUE data: [0x00, type_hi, type_lo]
-```
+| Operation   | Request (type)        | Request payload        | Response |
+|-------------|-----------------------|------------------------|----------|
+| Read        | `GET_REG` (11)        | `[reg]`, dlc = 1        | `REG_VALUE` (9): `[reg, value...]` |
+| Write       | `SET_REG` (10)        | `[reg, value...]`       | `REG_VALUE`: `[reg, value after the write]` |
+| Set bit     | `SET_BIT` (12)        | `[reg, bit]`            | `REG_VALUE`: `[reg, value after the change]` |
+| Clear bit   | `CLEAR_BIT` (13)      | `[reg, bit]`            | `REG_VALUE`: `[reg, value after the change]` |
 
-Known node types are listed in `doc/nodes.md`.
+- Values are big-endian; values longer than 7 bytes are sent as a multi-frame `REG_VALUE`
+  ([`protocol.md`](protocol.md#multi-frame-transfers)).
+- The response copies the request's `seqnum`.
+- On error the node answers `COMMAND_ERROR` (8) with `[error]`
+  ([error codes](protocol.md#error-codes)).
 
----
+Standard registers (0–9) follow these rules:
 
-### Register 1 — NODE_HARDWARE_REVISION
-
-Read-only. Returns a single ASCII character identifying the hardware revision
-(`'a'`, `'b'`, …). Set at `CAN_init()`.
-
-```
-GET_REG   data: [0x01]
-REG_VALUE data: [0x01, rev]       e.g. [0x01, 0x61] for 'a'
-```
-
----
-
-### Register 2 — NODE_VERSION
-
-Read-only. Returns the firmware version as two 16-bit values (major, minor),
-each in big-endian byte order.
-
-```
-GET_REG   data: [0x02]
-REG_VALUE data: [0x02, major_hi, major_lo, minor_hi, minor_lo]
-```
-
-Example: version 1.3 → `[0x02, 0x00, 0x01, 0x00, 0x03]`
+| Request | Result |
+|---------|--------|
+| `GET_REG` with dlc = 1 | value of the register |
+| `SET_REG` with dlc > 1 on a read-only register | `READ_ONLY_REGISTER` |
+| `SET_BIT` / `CLEAR_BIT`, `GET_REG` with dlc ≠ 1, `SET_REG` with dlc = 1 | `UNSUPPORTED_OPERATION` |
+| register not implemented on this node | `UNSUPPORTED_REGISTER` |
 
 ---
 
-### Register 3 — NODE_BUILD_INFO
+## Register list
 
-Read-only. Returns a build information string (e.g. git-describe output) as raw
-bytes. The current implementation sends up to 7 bytes per frame (one CAN frame).
-Full multi-frame transfer is not yet implemented (TODO in source).
-
-```
-GET_REG   data: [0x03]
-REG_VALUE data: [0x03, b0, b1, b2, b3, b4, b5, b6]   (up to 7 bytes of string)
-```
-
----
-
-### Register 4 — NODE_MCU_TYPE
-
-Read-only. Returns a 1-byte enum identifying the MCU. Determined at compile time
-from the `__AVR_*__` predefined macro.
-
-```
-GET_REG   data: [0x04]
-REG_VALUE data: [0x04, mcu_type]
-```
-
-| Value | Constant              | MCU            |
-|-------|-----------------------|----------------|
-| 1     | `NODE_MCU_ATMEGA16M1` | ATmega16M1     |
-| 2     | `NODE_MCU_ATMEGA32M1` | ATmega32M1     |
-| 3     | `NODE_MCU_ATMEGA64M1` | ATmega64M1     |
-| 4     | `NODE_MCU_ATMEGA16C1` | ATmega16C1     |
-| 5     | `NODE_MCU_ATMEGA32C1` | ATmega32C1     |
-| 6     | `NODE_MCU_ATMEGA64C1` | ATmega64C1     |
-| 7     | `NODE_MCU_AT90CAN128` | AT90CAN128     |
-| 8     | `NODE_MCU_PIC18F46K80`| PIC18F46K80    |
+| #  | Constant (`*_STD_REGISTER`) | Access | Size | Content |
+|---:|-----------------------------|:------:|------|---------|
+| 0  | `NODE_FLAGS`                | R      | 2 B  | Node flags (reset reason, bootloader, CAN state) |
+| 1  | `NODE_TYPE`                 | R      | 2 B  | Node type |
+| 2  | `NODE_HARDWARE_REVISION`    | R      | 2 B  | PCB revision (letter), BOM revision |
+| 3  | `NODE_VERSION`              | R      | 6 B  | Firmware version major, minor, patch |
+| 4  | `NODE_BUILD_INFO`           | R      | ≤ 31 B | Build info string |
+| 5  | `NODE_MCU_TYPE`             | R      | 1 B  | MCU type |
+| 6  | `NODE_SN`                   | R      | 10 B (AVR) / 4 B (PIC) | Serial number |
+| 7  | `NODE_POWER_SUPPLY`         | R      | 4 B  | Supply voltage — provided by the application |
+| 8  | `NODE_MCU_TEMP`             | R      | 4 B  | MCU temperature — provided by the application (AVR) |
+| 9  | `NODE_ID`                   | R/W    | 1 B  | Node ID |
 
 ---
 
-### Register 5 — NODE_SN
+### Register 0 — NODE_FLAGS
 
-Read-only. Intended for a unique hardware serial number. Currently always returns
-four zero bytes.
+16-bit node flags, the same value as `data[6..7]` of `NODE_INFO` / `NODE_TURNED_ON`.
 
 ```
-GET_REG   data: [0x05]
-REG_VALUE data: [0x05, 0x00, 0x00, 0x00, 0x00]
+GET_REG   [0x00]
+REG_VALUE [0x00, flags_hi, flags_lo]
+```
+
+| Bits | Constant                       | Meaning |
+|------|--------------------------------|---------|
+| 0–2  | `NODE_FLAG_RESET_REASON_MASK`  | Reason for the last reset (`NODE_RESET_BY_*`) |
+| 3    | `NODE_FLAG_BL_PRESENT`         | Bootloader present |
+| 4    | `NODE_FLAG_BL_MISMATCH`        | Bootloader built for another node type / PCB / BOM revision |
+| 5    | `NODE_FLAG_DEFAULT_ID`         | No node ID in EEPROM, the default ID is used |
+| 6    | `NODE_FLAG_CAN_ERROR_WARNING`  | CAN error warning / error passive / bus off occurred since start |
+| 7    | `NODE_FLAG_CAN_TX_FRAME_LOSS`  | A frame could not be sent since start |
+| 8    | `NODE_FLAG_CAN_RX_FRAME_LOSS`  | A received frame was dropped since start |
+| 9–15 | —                              | Reserved (0) |
+
+Bits 0–5 are set at start, bits 6–8 are sticky. Reset reason codes and details:
+[`protocol.md`](protocol.md#node-flags).
+
+---
+
+### Register 1 — NODE_TYPE
+
+Node type passed to `CAN_init()` (see [`nodes.md`](nodes.md)); also the broadcast group of
+the node's frames.
+
+```
+GET_REG   [0x01]
+REG_VALUE [0x01, type_hi, type_lo]
 ```
 
 ---
 
-### Register 6 — NODE_RESET_REASON
+### Register 2 — NODE_HARDWARE_REVISION
 
-Read-only. Returns the reason the node last reset. The value is captured before
-the watchdog is disabled in the early `.init3` startup code, and preserved across
-resets in a `.noinit` RAM variable.
+PCB revision as an ASCII letter (`'A'`, `'B'`, …) and BOM revision, both passed to `CAN_init()`.
 
 ```
-GET_REG   data: [0x06]
-REG_VALUE data: [0x06, reason]
+GET_REG   [0x02]
+REG_VALUE [0x02, pcb, bom]        e.g. [0x02, 0x42, 0x01] = PCB 'B', BOM 1
 ```
 
-| Value | Constant                       | Meaning                    |
-|-------|--------------------------------|----------------------------|
-| 0     | `NODE_RESET_BY_UNKNOW`         | Unknown / unclassified     |
-| 1     | `NODE_RESET_BY_POWER_ON`       | Power-on (POR + BOR set)   |
-| 2     | `NODE_RESET_BY_WATCHDOG`       | Watchdog timeout           |
-| 3     | `NODE_RESET_BY_BROWN_OUT`      | Brown-out                  |
-| 4     | `NODE_RESET_BY_EXTERNAL_SOURCE`| External reset pin         |
+---
+
+### Register 3 — NODE_VERSION
+
+Firmware version passed to `CAN_init()`, three 16-bit values.
+
+```
+GET_REG   [0x03]
+REG_VALUE [0x03, major_hi, major_lo, minor_hi, minor_lo, patch_hi, patch_lo]
+```
+
+Example: 1.3.2 → `[0x03, 0x00, 0x01, 0x00, 0x03, 0x00, 0x02]`.
+(`NODE_INFO` carries the same version packed into 32 bits.)
+
+---
+
+### Register 4 — NODE_BUILD_INFO
+
+Build info string passed to `CAN_init()` (e.g. `git describe` output), without the
+terminating zero, up to 31 bytes; longer than 7 bytes is sent as a multi-frame `REG_VALUE`.
+
+```
+GET_REG   [0x04]
+REG_VALUE [0x04, c0, c1, ...]
+```
+
+---
+
+### Register 5 — NODE_MCU_TYPE
+
+MCU type, fixed at compile time.
+
+```
+GET_REG   [0x05]
+REG_VALUE [0x05, mcu]
+```
+
+| Value | Constant (`NODE_MCU_*`) | MCU |
+|------:|-------------------------|-----|
+| 1 | `ATMEGA16M1`  | ATmega16M1 |
+| 2 | `ATMEGA32M1`  | ATmega32M1 |
+| 3 | `ATMEGA64M1`  | ATmega64M1 |
+| 4 | `ATMEGA16C1`  | ATmega16C1 |
+| 5 | `ATMEGA32C1`  | ATmega32C1 |
+| 6 | `ATMEGA64C1`  | ATmega64C1 |
+| 7 | `AT90CAN128`  | AT90CAN128 |
+| 8 | `PIC18F46K80` | PIC18F46K80 |
+
+The AVR library is built for ATmega16M1, 32M1, 64M1, 32C1 and AT90CAN128.
+
+---
+
+### Register 6 — NODE_SN
+
+Hardware serial number; the size depends on the MCU:
+
+- **AVR (ATmega16/32/64 M1/C1)** — 10 bytes, the factory serial number from the signature row
+  (addresses 0x000E–0x0017: lot number, wafer number, die X/Y coordinates). The block is not
+  documented for the M1/C1 family; the same block is documented as the serial number for
+  ATmega328PB. Not available on AT90CAN128 (`UNSUPPORTED_REGISTER`). Multi-frame response.
+- **PIC (PIC18F46K80)** — 4 bytes from User ID memory 0x200001–0x200004, written when the
+  device is programmed (see [`SN.md`](SN.md)).
+
+```
+GET_REG   [0x06]
+REG_VALUE [0x06, sn0, sn1, ...]
+```
 
 ---
 
 ### Register 7 — NODE_POWER_SUPPLY
 
-Not implemented. Returns `COMMAND_ERROR` / `H9FRAME_ERROR_INVALID_REGISTER`.
-Reserved for supply voltage measurement.
+Supply voltage, measured by the application (the library has no ADC code). By convention a
+32-bit value in **millivolts**:
+
+```
+GET_REG   [0x07]
+REG_VALUE [0x07, mv_3, mv_2, mv_1, mv_0]
+```
+
+The application provides the value:
+
+- **AVR** — define `void read_power_supply_register(uint8_t destination_id, uint8_t seqnum)`;
+  it overrides the library's weak default (which answers `UNSUPPORTED_REGISTER`) and sends the
+  value with `CAN_send_reg_value()`.
+- **PIC** — assign the function to the pointer `read_power_supply_register` (`h9pic/can.h`);
+  `NULL` (default) answers `UNSUPPORTED_REGISTER`.
 
 ---
 
 ### Register 8 — NODE_MCU_TEMP
 
-Not implemented. Returns `COMMAND_ERROR` / `H9FRAME_ERROR_INVALID_REGISTER`.
-Reserved for on-chip temperature sensor.
+MCU temperature, measured by the application. By convention a signed 32-bit value in **°C**.
+
+- **AVR** — define `void read_mcu_temp_register(uint8_t destination_id, uint8_t seqnum)`
+  (weak default answers `UNSUPPORTED_REGISTER`). The ATmega16/32/64M1 temperature sensor
+  calibration (TSOFFSET 0x0005, TSGAIN 0x0007, silicon revision 0x003F in the signature row)
+  is described in the automotive datasheet 7647, section 18.8.2.
+- **PIC** — not supported (`UNSUPPORTED_REGISTER`).
+
+```
+GET_REG   [0x08]
+REG_VALUE [0x08, t_3, t_2, t_1, t_0]
+```
 
 ---
 
 ### Register 9 — NODE_ID
 
-Read/write. The node's 9-bit CAN address (valid range 0–511).
+The node ID (1–254).
 
-**GET:**
 ```
-GET_REG   data: [0x09]
-REG_VALUE data: [0x09, id_hi, id_lo]
-```
-`id_hi` = bit 8 (0 or 1); `id_lo` = bits 7–0.
+GET_REG   [0x09]
+REG_VALUE [0x09, id]
 
-**SET:**
-```
-SET_REG   data: [0x09, id_hi, id_lo]    dlc = 3
-REG_VALUE data: [0x09, id_hi, id_lo]   (echoes the value currently active)
+SET_REG   [0x09, id]      dlc = 2
+REG_VALUE [0x09, id]      the ID currently in use, not the new one
 ```
 
-The new ID is written to EEPROM immediately and takes effect after the next
-reset. The response echoes the **current** (pre-reset) node ID, not the new one.
+- The new ID is written to EEPROM at once and used after the next reset.
+- dlc ≠ 2 → `REGISTER_SIZE_MISMATCH`.
+- AVR: ID 0 or 0xFF → `INVALID_VALUE` (0 means "no ID"). The PIC library does not check the value.
 
-Wrong `dlc` (not 3) returns `COMMAND_ERROR` / `H9FRAME_ERROR_REGISTER_SIZE_MISMATCH`.
+EEPROM storage:
+
+- **AVR** (`h9avr/node_id.h`) — two independent copies, each a ring of 10 blocks
+  (0x10–0x5F and 0x80–0xCF; address 0 is left unused, it is the most exposed to corruption on
+  brown-out). Each 8-byte block (two whole EEPROM pages) holds a sequence number and a CRC; the
+  valid block with the newest sequence number from either copy is used, so an interrupted write
+  or a damaged page never loses the ID. `CAN_init()` repairs a damaged copy (writes only when
+  needed).
+- **PIC** (`h9pic/node_id.h`, `pic/ee_mem.c`) — 16 interleaved sectors at 0x100–0x17F
+  (0x00–0x7F unused). Every write stores the ID in two sectors and invalidates the others; the
+  valid sector with the newest counter is used. `CAN_init()` rewrites the copies only if one is
+  missing or damaged. The same mechanism stores application data at `USER_BASE` (0x80).
 
 ---
 
-## Error codes
+## Application registers (≥ 10)
 
-| Code | Constant                              | Meaning                                      |
-|------|---------------------------------------|----------------------------------------------|
-| 1    | `H9FRAME_ERROR_INVALID_MSG`           | Message type not valid for this node state   |
-| 2    | `H9FRAME_ERROR_BOOTLOADER_UNSUPPORTED`| NODE_UPGRADE requested but no bootloader     |
-| 3    | `H9FRAME_ERROR_UNSUPPORTED_OPERATION` | Operation not supported for this register    |
-| 4    | `H9FRAME_ERROR_INVALID_REGISTER`      | Register number unknown                      |
-| 5    | `H9FRAME_ERROR_READ_ONLY_REGISTER`    | Attempted write to a read-only register      |
-| 6    | `H9FRAME_ERROR_WRITE_ONLY_REGISTER`   | Attempted read from a write-only register    |
-| 7    | `H9FRAME_ERROR_REGISTER_SIZE_MISMATCH`| Wrong number of data bytes for this register |
+`GET_REG`, `SET_REG`, `SET_BIT` and `CLEAR_BIT` for registers 10 and above are returned by
+`CAN_get_msg()` (return value 1). The application must answer every such request with the
+request's `seqnum`:
+
+- with the value — `CAN_send_reg_value(reg, cm.source_id, cm.unicast.seqnum, value, size)`;
+  for `SET_REG` / `SET_BIT` / `CLEAR_BIT` the value after the change;
+- or with an error — `send_command_error(error, cm.source_id, cm.unicast.seqnum)`, by
+  convention `INVALID_REGISTER` for an unknown register, `READ_ONLY_REGISTER`,
+  `UNSUPPORTED_OPERATION` (e.g. `SET_BIT` on a register that is not a bit field),
+  `REGISTER_SIZE_MISMATCH`.
+
+Register layouts of the node types are described in the h9d node description files
+(`conf/nodes/*.conf` in h9d).

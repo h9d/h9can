@@ -11,11 +11,13 @@
 #include <avr/eeprom.h>
 #include <avr/interrupt.h>
 #include <avr/wdt.h>
+#include <avr/boot.h>
 
 #include <h9def.h>
 
 #include "h9avr/can.h"
 #include "h9avr/node_id.h"
+#include "h9avr/bl_info.h"
 
 #include <errno.h>
 
@@ -40,6 +42,7 @@ typedef struct {
 static can_buf_t can_rx_buf[CAN_RX_BUF_SIZE];
 static volatile uint8_t can_rx_buf_top = 0;
 static volatile uint8_t can_rx_buf_bottom = 0;
+static volatile uint8_t can_rx_buf_overflow = 0;
 
 static can_buf_t can_tx_buf[CAN_TX_BUF_SIZE];
 static volatile uint8_t can_tx_buf_top = 0;
@@ -54,11 +57,24 @@ static uint8_t reset_reason;
 
 static struct {
     uint16_t node_type;
-    char hardware_revision;
+    uint8_t pcb_revision;
+    uint8_t bom_revision;
     uint16_t version_major;
     uint16_t version_minor;
     uint16_t version_patch;
     char build_info[H9FRAME_MAX_REGISTER_SIZE];
+    volatile union {                        // NODE_FLAG_* in h9def.h, register 0, NODE_INFO data[6..7]
+        struct {
+            unsigned reset_reason : 3;      //0-2
+            unsigned bl_present : 1;        //3
+            unsigned bl_mismatch : 1;       //4
+            unsigned default_id : 1;        //5
+            unsigned can_error_warning : 1; //6, sticky
+            unsigned can_tx_frame_loss : 1; //7, sticky
+            unsigned can_rx_frame_loss : 1; //8, sticky
+        };
+        uint16_t raw;
+    } flags;
 } node_info;
 
 /* --- Forward declarations --- */
@@ -81,31 +97,41 @@ static void set_CAN_unicast_id(uint8_t type, uint8_t flags, uint8_t src, uint8_t
 static void set_CAN_unicast_id_mask(uint8_t type, uint8_t flags, uint8_t src, uint8_t dst, uint8_t seq);
 static void set_CAN_broadcast_id(uint8_t type, uint8_t src, uint16_t node_type);
 static void set_CAN_broadcast_id_mask(uint8_t type, uint8_t src, uint16_t node_type);
-static void send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t *value, size_t length);
 static void send_reg_value1(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value);
 static void send_reg_value2(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2);
-static void send_reg_value3(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3);
-static void send_reg_value4(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4);
 static void send_reg_value6(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4, uint8_t value5, uint8_t value6);
-static void CAN_send_node_info_broadcast(uint8_t turn_on);
+static void CAN_send_node_info_broadcast(uint8_t type);
 static void process_standard_reg(h9frame_t *cm);
 static uint8_t process_msg(h9frame_t *cm);
 
 /* ======================== PUBLIC FUNCTIONS ======================== */
 
-void CAN_init(uint16_t node_type, char hardware_rev, uint16_t version_major, uint16_t version_minor, uint16_t version_patch, const char *build_info) {
+uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint8_t pcb_rev, uint8_t bom_rev, uint16_t version_major, uint16_t version_minor, uint16_t version_patch, const char *build_info) {
+    uint8_t ret = 1;
+
     node_info.node_type = node_type;
-    node_info.hardware_revision = hardware_rev;
+    node_info.pcb_revision = pcb_rev;
+    node_info.bom_revision = bom_rev;
     node_info.version_major = version_major;
     node_info.version_minor = version_minor;
     node_info.version_patch = version_patch;
     strncpy(node_info.build_info, build_info, H9FRAME_MAX_REGISTER_SIZE);
 
-    uint16_t tmp_node_type = 0;
-    can_node_id = read_node_id(&tmp_node_type);
+    node_id_repair();          // restore a damaged EEPROM copy of the node id (writes only if needed)
+    can_node_id = read_node_id();
+    if (can_node_id == 0) {    // no valid id in EEPROM
+        can_node_id = default_id;
+        ret = 0;
+    }
 
-    if (tmp_node_type != node_type) {
-        write_node_id(can_node_id, node_type);
+    node_info.flags.raw = 0;
+    node_info.flags.reset_reason = reset_reason;
+    node_info.flags.default_id = !ret;
+
+    h9_bl_info_t bl;
+    if (read_bl_info(&bl)) {
+        node_info.flags.bl_present = 1;
+        node_info.flags.bl_mismatch = bl.node_type != node_type || bl.pcb_rev != pcb_rev || bl.bom_rev != bom_rev;
     }
 
     CANGCON = ( 1 << SWRES );   // Software reset
@@ -157,10 +183,18 @@ void CAN_init(uint16_t node_type, char hardware_rev, uint16_t version_major, uin
 
     CANGIE = (1<<ENBOFF) | (1<<ENIT) | (1<<ENRX) | (1<<ENTX) | (1<<ENERR) | (1<<ENBX) | (1<<ENERG);
     CANGCON = 1<<ENASTB;
+
+    return ret;
+}
+
+// Error counter reached the warning limit (96), like TXWARN/RXWARN on PIC.
+// CANTEC is 8-bit and can't show bus off (TEC > 255), hence the CANGSTA check.
+uint8_t CAN_bus_error_warning(void) {
+    return CANTEC >= 96 || CANREC >= 96 || (CANGSTA & ((1 << ERRP) | (1 << BOFF)));
 }
 
 void CAN_send_turned_on_broadcast(void) {
-    CAN_send_node_info_broadcast(1);
+    CAN_send_node_info_broadcast(H9FRAME_TYPE_NODE_TURNED_ON);
 }
 
 void CAN_set_msg_filter_1(uint16_t broadcast_group) {
@@ -188,7 +222,11 @@ void CAN_set_msg_filter_2(uint16_t broadcast_group) {
 }
 
 uint8_t CAN_try_put_msg(h9frame_t *cm) {
-    set_mandatory_message_fields(cm);
+    cm->source_id = can_node_id;
+
+    if (cm->type & H9FRAME_UNICAST_BROADCAST_BIT)
+        cm->broadcast.group = node_info.node_type;
+
     uint8_t sreg = SREG;
     cli();
     CANPAGE = 0 << MOBNB0;              // Select MOb0 for transmission
@@ -234,6 +272,20 @@ uint8_t __attribute__((weak)) CAN_put_msg(h9frame_t *cm) {
             can_tx_buf_top = tmp_idx;
             ret = 2;
         }
+        else if (CANGSTA & ((1 << ERRP) | (1 << BOFF))) {    //bus passive / bus off error
+            // replace the newest queued frame with NODE_FAULT, it will be sent once the bus recovers
+            uint8_t last_idx = (uint8_t) ((can_tx_buf_top - 1) & CAN_TX_BUF_INDEX_MASK);
+
+            h9frame_t fault;
+            fault.type = H9FRAME_TYPE_NODE_FAULT;
+            fault.source_id = can_node_id;
+            fault.broadcast.group = node_info.node_type;
+            calc_can_id(&can_tx_buf[last_idx].canidt1, &can_tx_buf[last_idx].canidt2, &can_tx_buf[last_idx].canidt3, &can_tx_buf[last_idx].canidt4, &fault);
+
+            can_tx_buf[last_idx].data[0] = NODE_FAULT_CAN_FRAME_LOSS;
+            can_tx_buf[last_idx].cancdmob = 1;
+            node_info.flags.can_tx_frame_loss = 1;  // interrupts disabled here
+        }
     }
     SREG = sreg;
     return ret;
@@ -251,10 +303,36 @@ void send_command_error(uint8_t errno, uint8_t destination, uint8_t seqnum) {
     CAN_put_msg(&cm);
 }
 
+void send_node_fault(uint8_t errno) {
+    h9frame_t cm;
+    cm.type = H9FRAME_TYPE_NODE_FAULT;
+
+    cm.data[0] = errno;
+    cm.dlc = 1;
+    CAN_put_msg(&cm);
+}
+
 // 31 30 29 | 28     27 26 25 24 23 22 21 | 20 19 18 17 16 15 14 13 | 12 11 10 09 08 07 06 05 | 04 03 02 01 00
 // -- -- -- | ty_(0) ty ty ty ty so so so | so so so so so fl fl fl | ds ds ds ds ds ds ds ds | sq sq sq sq sq
 // -- -- -- | ty_(1) ty ty ty ty so so so | so so so so so nt nt nt | nt nt nt nt nt nt nt nt | nt nt nt nt nt
 uint8_t CAN_get_msg(h9frame_t *cm) {
+    if (CAN_bus_error_warning()) {
+        uint8_t sreg = SREG;    // flags are also set from interrupts (CAN_put_msg), keep the read-modify-write atomic
+        cli();
+        node_info.flags.can_error_warning = 1;
+        SREG = sreg;
+    }
+
+    // RX frame lost: software buffer full
+    if (can_rx_buf_overflow) {
+        can_rx_buf_overflow = 0;
+        uint8_t sreg = SREG;
+        cli();
+        node_info.flags.can_rx_frame_loss = 1;
+        SREG = sreg;
+        send_node_fault(NODE_FAULT_CAN_RX_FRAME_LOSS);
+    }
+
     if (can_rx_buf_top != can_rx_buf_bottom) {
         cm->type = can_rx_buf[can_rx_buf_bottom].canidt1 >> 3;
         cm->source_id = (can_rx_buf[can_rx_buf_bottom].canidt1 << 5) | (can_rx_buf[can_rx_buf_bottom].canidt2 >> 3);
@@ -276,35 +354,6 @@ uint8_t CAN_get_msg(h9frame_t *cm) {
         return process_msg(cm);
     }
     return 0;
-}
-
-void CAN_init_new_msg(h9frame_t *fr) {
-    fr->source_id = can_node_id;
-    fr->unicast.flags = 0;
-    fr->unicast.destination_id = 0;
-    fr->unicast.seqnum = 0;
-    fr->broadcast.group = 0;
-    fr->dlc = 0;
-}
-
-void CAN_init_response_msg(const h9frame_t *req, h9frame_t *res) {
-    res->unicast.seqnum = req->unicast.seqnum;
-    switch (req->type) {
-        case H9FRAME_TYPE_GET_REG:
-        case H9FRAME_TYPE_SET_REG:
-        case H9FRAME_TYPE_SET_BIT:
-        case H9FRAME_TYPE_CLEAR_BIT:
-            res->type = H9FRAME_TYPE_REG_VALUE;
-            break;
-        case H9FRAME_TYPE_DISCOVER:
-            res->type = H9FRAME_TYPE_NODE_INFO;
-            break;
-        default:
-            break;
-    }
-    res->source_id = can_node_id;
-    res->unicast.destination_id = req->source_id;
-    res->dlc = 0;
 }
 
 /* ======================== STATIC FUNCTIONS ======================== */
@@ -336,15 +385,21 @@ ISR(CAN_INT_vect) {
         uint8_t savecanpage = CANPAGE;
         CANPAGE = canhpmob;
         if (CANSTMOB & (1 << RXOK)) {
-            can_rx_buf[can_rx_buf_top].canidt1 = CANIDT1;
-            can_rx_buf[can_rx_buf_top].canidt2 = CANIDT2;
-            can_rx_buf[can_rx_buf_top].canidt3 = CANIDT3;
-            can_rx_buf[can_rx_buf_top].canidt4 = CANIDT4;
-            can_rx_buf[can_rx_buf_top].cancdmob = CANCDMOB & 0x1f;
-            for (uint8_t i = 0; i < 8; ++i) {
-                can_rx_buf[can_rx_buf_top].data[i] = CANMSG;
+            uint8_t next_top = (uint8_t)((can_rx_buf_top + 1) & CAN_RX_BUF_INDEX_MASK);
+            if (next_top == can_rx_buf_bottom) {
+                can_rx_buf_overflow = 1;
             }
-            can_rx_buf_top = (uint8_t)((can_rx_buf_top + 1) & CAN_RX_BUF_INDEX_MASK);
+            else {
+                can_rx_buf[can_rx_buf_top].canidt1 = CANIDT1;
+                can_rx_buf[can_rx_buf_top].canidt2 = CANIDT2;
+                can_rx_buf[can_rx_buf_top].canidt3 = CANIDT3;
+                can_rx_buf[can_rx_buf_top].canidt4 = CANIDT4;
+                can_rx_buf[can_rx_buf_top].cancdmob = CANCDMOB & 0x1f;
+                for (uint8_t i = 0; i < 8; ++i) {
+                    can_rx_buf[can_rx_buf_top].data[i] = CANMSG;
+                }
+                can_rx_buf_top = next_top;
+            }
             CANCDMOB = (1<<CONMOB1) | (1<<IDE); //rx mob
             CANSTMOB = 0x00;  // Reset reason on selected channel
         }
@@ -430,28 +485,7 @@ static void set_CAN_broadcast_id_mask(uint8_t type, uint8_t src, uint16_t node_t
     calc_can_broadcast_id(&CANIDM1, &CANIDM2, &CANIDM3, &CANIDM4, type | 0x10, src, node_type);
 }
 
-#ifdef __AVR__
-static void set_mandatory_message_fields(h9frame_t *cm) {
-#else
-void set_mandatory_message_fields(h9frame_t *cm) {
-#endif
-    static uint8_t next_seqnum = 0;
-
-    cm->source_id = can_node_id;
-
-    if (cm->type == H9FRAME_TYPE_SET_REG ||
-        cm->type == H9FRAME_TYPE_GET_REG ||
-        cm->type == H9FRAME_TYPE_SET_BIT ||
-        cm->type == H9FRAME_TYPE_CLEAR_BIT ||
-        cm->type == H9FRAME_TYPE_NODE_UPGRADE ||
-        cm->type == H9FRAME_TYPE_NODE_RESET) {
-
-        cm->unicast.seqnum = next_seqnum;
-        ++next_seqnum;
-    }
-}
-
-static void send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t *value, size_t length) {
+void CAN_send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t *value, size_t length) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
     cm.unicast.destination_id = destination;
@@ -462,16 +496,16 @@ static void send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum
     for (uint8_t msg_num = 0; value_ix < length; ++msg_num) {
         uint8_t i = 1;
         cm.data[0] = registry;
-
+        
         if (length < 8) {
             cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
         }
         else if (msg_num == 0) {
             cm.unicast.flags = H9FRAME_FLAG_MULTI_FRAME_FIRST;
-            cm.data[1] = (length + 5) / 6;
+            cm.data[1] = (uint8_t)((length + 5) / 6);
             i++;
         }
-        else if (value_ix + 6 < length) {
+        else if (value_ix < length - 6) {
             cm.unicast.flags = H9FRAME_FLAG_MULTI_FRAME_MIDDLE;
             cm.data[1] = msg_num;
             i++;
@@ -481,7 +515,7 @@ static void send_reg_value(uint8_t registry, uint8_t destination, uint8_t seqnum
             cm.data[1] = msg_num;
             i++;
         }
-
+        
         for (; i < 8 && value_ix < length; ++i) {
             cm.data[i] = value[value_ix];
             value_ix++;
@@ -520,37 +554,6 @@ static void send_reg_value2(uint8_t registry, uint8_t destination, uint8_t seqnu
     CAN_put_msg(&cm);
 }
 
-static void send_reg_value3(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3) {
-    h9frame_t cm;
-    cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
-    cm.unicast.destination_id = destination;
-    cm.unicast.seqnum = seqnum;
-
-    cm.data[0] = registry;
-    cm.data[1] = value1;
-    cm.data[2] = value2;
-    cm.data[3] = value3;
-    cm.dlc = 4;
-    CAN_put_msg(&cm);
-}
-
-static void send_reg_value4(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4) {
-    h9frame_t cm;
-    cm.type = H9FRAME_TYPE_REG_VALUE;
-    cm.unicast.flags = H9FRAME_FLAG_SINGE_FRAME;
-    cm.unicast.destination_id = destination;
-    cm.unicast.seqnum = seqnum;
-
-    cm.data[0] = registry;
-    cm.data[1] = value1;
-    cm.data[2] = value2;
-    cm.data[3] = value3;
-    cm.data[4] = value4;
-    cm.dlc = 5;
-    CAN_put_msg(&cm);
-}
-
 static void send_reg_value6(uint8_t registry, uint8_t destination, uint8_t seqnum, uint8_t value1, uint8_t value2, uint8_t value3, uint8_t value4, uint8_t value5, uint8_t value6) {
     h9frame_t cm;
     cm.type = H9FRAME_TYPE_REG_VALUE;
@@ -569,25 +572,25 @@ static void send_reg_value6(uint8_t registry, uint8_t destination, uint8_t seqnu
     CAN_put_msg(&cm);
 }
 
-static void CAN_send_node_info_broadcast(uint8_t turn_on) {
+// type: H9FRAME_TYPE_NODE_INFO or H9FRAME_TYPE_NODE_TURNED_ON
+static void CAN_send_node_info_broadcast(uint8_t type) {
     h9frame_t cm;
 
-    if (turn_on)
-        cm.type = H9FRAME_TYPE_NODE_TURNED_ON;
-    else
-        cm.type = H9FRAME_TYPE_NODE_INFO;
-    cm.source_id = can_node_id;
-    cm.broadcast.group = node_info.node_type;
+    cm.type = type;
+
+    // version packed into 32 bits: major (10 bits) | minor (11 bits) | patch (11 bits), same as BOOTLOADER_TURNED_ON
+    uint32_t version = ((uint32_t)(node_info.version_major & 0x3ff) << 22) | ((uint32_t)(node_info.version_minor & 0x7ff) << 11) | (node_info.version_patch & 0x7ff);
+    uint16_t flags = node_info.flags.raw;
 
     cm.dlc = 8;
-    cm.data[0] = (node_info.node_type >> 8) & 0xff;
-    cm.data[1] = (node_info.node_type) & 0xff;
-    cm.data[2] = (node_info.version_major >> 8);
-    cm.data[3] = node_info.version_major & 0xff;
-    cm.data[4] = (node_info.version_minor >> 8) & 0xff;
-    cm.data[5] = node_info.version_minor & 0xff;
-    cm.data[6] = node_info.hardware_revision;
-    cm.data[7] = reset_reason;
+    cm.data[0] = (version >> 24) & 0xff;
+    cm.data[1] = (version >> 16) & 0xff;
+    cm.data[2] = (version >> 8) & 0xff;
+    cm.data[3] = version & 0xff;
+    cm.data[4] = node_info.pcb_revision;
+    cm.data[5] = node_info.bom_revision;
+    cm.data[6] = (flags >> 8) & 0xff;
+    cm.data[7] = flags & 0xff;
     CAN_put_msg(&cm);
 }
 
@@ -595,26 +598,32 @@ void __attribute__((weak)) read_power_supply_register(uint8_t destination_id, ui
     send_command_error(H9FRAME_ERROR_UNSUPPORTED_REGISTER, destination_id, seqnum);
 }
 
+void __attribute__((weak)) read_mcu_temp_register(uint8_t destination_id, uint8_t seqnum) {
+    send_command_error(H9FRAME_ERROR_UNSUPPORTED_REGISTER, destination_id, seqnum);
+}
+
 static void process_standard_reg(h9frame_t *cm) {
     if (cm->type == H9FRAME_TYPE_SET_REG && cm->dlc > 1) {
         switch (cm->data[0]) {
+            case NODE_FLAGS_STD_REGISTER:
             case NODE_TYPE_STD_REGISTER:
             case NODE_HARDWARE_REVISION_STD_REGISTER:
             case NODE_VERSION_STD_REGISTER:
             case NODE_BUILD_INFO_STD_REGISTER:
             case NODE_MCU_TYPE_STD_REGISTER:
-            //case NODE_SN_STD_REGISTER:
-            case NODE_RESET_REASON_STD_REGISTER:
-            //case NODE_POWER_SUPPLY_STD_REGISTER,
-            //case NODE_MCU_TEMP_STD_REGISTER,
+            case NODE_SN_STD_REGISTER:
+            case NODE_POWER_SUPPLY_STD_REGISTER:
+            case NODE_MCU_TEMP_STD_REGISTER:
                 send_command_error(H9FRAME_ERROR_READ_ONLY_REGISTER, cm->source_id, cm->unicast.seqnum);
                 return;
             case NODE_ID_STD_REGISTER:
                 if (cm->dlc == 2) {
-                    uint8_t sreg = SREG;
-                    cli();
+                    if (cm->data[1] == 0 || cm->data[1] == 0xff) {     // 0 = no id (default id is used), 0xff reserved
+                        send_command_error(H9FRAME_ERROR_INVALID_VALUE, cm->source_id, cm->unicast.seqnum);
+                        return;
+                    }
+                    // takes ~25 ms (EEPROM writes); avr-libc disables interrupts only for the EEPE timed sequence
                     write_node_id(cm->data[1], node_info.node_type);
-                    SREG = sreg;
 
                     send_reg_value1(NODE_ID_STD_REGISTER, cm->source_id, cm->unicast.seqnum, can_node_id);
                     return;
@@ -630,11 +639,16 @@ static void process_standard_reg(h9frame_t *cm) {
     }
     else if (cm->type == H9FRAME_TYPE_GET_REG && cm->dlc == 1) {
         switch (cm->data[0]) {
+            case NODE_FLAGS_STD_REGISTER: {
+                uint16_t flags = node_info.flags.raw;
+                send_reg_value2(NODE_FLAGS_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (flags >> 8) & 0xff, flags & 0xff);
+                return;
+            }
             case NODE_TYPE_STD_REGISTER:
                 send_reg_value2(NODE_TYPE_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (node_info.node_type >> 8) & 0xff, (node_info.node_type) & 0xff);
                 return;
             case NODE_HARDWARE_REVISION_STD_REGISTER:
-                send_reg_value1(NODE_HARDWARE_REVISION_STD_REGISTER, cm->source_id, cm->unicast.seqnum, node_info.hardware_revision);
+                send_reg_value2(NODE_HARDWARE_REVISION_STD_REGISTER, cm->source_id, cm->unicast.seqnum, node_info.pcb_revision, node_info.bom_revision);
                 return;
             case NODE_VERSION_STD_REGISTER:
                 send_reg_value6(NODE_VERSION_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (node_info.version_major >> 8), node_info.version_major & 0xff, (node_info.version_minor >> 8) & 0xff, node_info.version_minor & 0xff, (node_info.version_patch >> 8) & 0xff, node_info.version_patch & 0xff);
@@ -642,7 +656,7 @@ static void process_standard_reg(h9frame_t *cm) {
             case NODE_BUILD_INFO_STD_REGISTER: {
                 size_t len = 0;
                 for (; node_info.build_info[len] && len < (H9FRAME_MAX_REGISTER_SIZE - 1); len++);
-                send_reg_value(NODE_BUILD_INFO_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (uint8_t*)&node_info.build_info, len);
+                CAN_send_reg_value(NODE_BUILD_INFO_STD_REGISTER, cm->source_id, cm->unicast.seqnum, (uint8_t*)&node_info.build_info, len);
                 return;
             }
             case NODE_MCU_TYPE_STD_REGISTER:
@@ -660,17 +674,22 @@ static void process_standard_reg(h9frame_t *cm) {
 #error Unsupported MCU
 #endif
                 return;
-            // case NODE_SN_STD_REGISTER: //CPU serial ID
-            //     send_reg_value4(NODE_SN_STD_REGISTER, cm->source_id, cm->unicast.seqnum, 0, 0, 0, 0);
-            //     return;
-            case NODE_RESET_REASON_STD_REGISTER:
-                send_reg_value1(NODE_RESET_REASON_STD_REGISTER, cm->source_id, cm->unicast.seqnum, reset_reason);
+#ifdef SIGRD    // signature row readable from software (not on AT90CAN128)
+            case NODE_SN_STD_REGISTER: {
+                // factory serial number: signature row 0x000E-0x0017 (lot number, wafer number, X/Y coordinates)
+                uint8_t sn[10];
+                for (uint8_t i = 0; i < sizeof(sn); i++)
+                    sn[i] = boot_signature_byte_get(0x000E + i);
+                CAN_send_reg_value(NODE_SN_STD_REGISTER, cm->source_id, cm->unicast.seqnum, sn, sizeof(sn));
                 return;
+            }
+#endif
             case NODE_POWER_SUPPLY_STD_REGISTER:
                 read_power_supply_register(cm->source_id, cm->unicast.seqnum);
                 return;
-            //case NODE_MCU_TEMP_STD_REGISTER,
-            //     return;
+            case NODE_MCU_TEMP_STD_REGISTER:
+                read_mcu_temp_register(cm->source_id, cm->unicast.seqnum);
+                return;
             case NODE_ID_STD_REGISTER:
                 send_reg_value1(NODE_ID_STD_REGISTER, cm->source_id, cm->unicast.seqnum, can_node_id);
                 return;
@@ -689,7 +708,7 @@ static uint8_t process_msg(h9frame_t *cm) {
         if (cm->type == H9FRAME_TYPE_DISCOVER || cm->type == H9FRAME_TYPE_GROUP_RESET) {
             if (cm->broadcast.group == node_info.node_type || cm->broadcast.group == H9FRAME_BROADCAST_ALL_GROUP) {
                 if (cm->type == H9FRAME_TYPE_DISCOVER) {
-                    CAN_send_node_info_broadcast(0);
+                    CAN_send_node_info_broadcast(H9FRAME_TYPE_NODE_INFO);
                     return 0;
                 }
                 else if (cm->type == H9FRAME_TYPE_GROUP_RESET) {

@@ -10,7 +10,6 @@
 #include <h9avr/node_id.h>
 
 uint8_t can_node_id;
-uint16_t can_node_type;
 
 static void set_CAN_unicast_id(uint8_t type, uint8_t src, uint8_t flags, uint8_t dst, uint8_t seq);
 static void set_CAN_unicast_id_mask(uint8_t type, uint8_t src, uint8_t flags, uint8_t dst, uint8_t seq);
@@ -18,7 +17,7 @@ static void calc_can_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile u
 static void set_CAN_id(h9frame_t *cm);
 
 void CAN_init(void) {
-    can_node_id = read_node_id(&can_node_type);
+    can_node_id = read_node_id();
 
     CANGCON = ( 1 << SWRES );   // Software reset
     CANTCON = 0x00;             // CAN timing prescaler set to 0;
