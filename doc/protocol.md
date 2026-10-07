@@ -239,8 +239,9 @@ info or the AVR serial number) are sent as several `REG_VALUE` frames with the s
 - A node copies the request's `seqnum` into every response frame (`REG_VALUE`, all frames of a
   multi-frame value, `COMMAND_ERROR`); the host matches responses by source ID, type, register
   and `seqnum`.
-- Bootloader responses (`PAGE_FILL_NEXT`, `PAGE_WRITED`, `PAGE_FILL_BREAK`) do not reliably
-  echo it; hosts must not depend on their `seqnum`.
+- Bootloader frames are the exception: the bootloader numbers its `PAGE_FILL_NEXT` responses
+  and the host copies that `seqnum` to `PAGE_FILL` (see [bootloader](bootloader.md#flashing));
+  the `seqnum` of `PAGE_WRITED` and `PAGE_FILL_BREAK` is not meaningful.
 - Broadcast frames have no `seqnum` (those bits belong to the group).
 
 ---

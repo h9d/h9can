@@ -79,34 +79,52 @@ address 0. One exchange per page:
 Host                                         Node (bootloader)
  │                                                 │
  ├─── PAGE_START     [n_hi, n_lo] ────────────────►│ page / block n erased
- │◄── PAGE_FILL_NEXT [rem_hi, rem_lo] ─────────────┤ rem = page size
- ├─── PAGE_FILL      [b0 ... b7] ─────────────────►│ 8 bytes of the image
- │◄── PAGE_FILL_NEXT [rem_hi, rem_lo] ─────────────┤ rem -= 8
+ │◄── PAGE_FILL_NEXT [rem_hi, rem_lo] seq=s ───────┤ rem = page size
+ ├─── PAGE_FILL      [b0 ... b7]      seq=s ──────►│ 8 bytes of the image at page size - rem
+ │◄── PAGE_FILL_NEXT [rem_hi, rem_lo] seq=s+1 ─────┤ rem -= 8
  │            ...  until rem = 0  ...              │
- │◄── PAGE_WRITED    [a_hi, a_lo] ─────────────────┤ page written
+ │◄── PAGE_WRITED    [n_hi, n_lo] ─────────────────┤ page n written
  ├─── PAGE_START     [n+1] ...                     │
 ```
 
 | Frame | Payload |
 |-------|---------|
 | `PAGE_START` (1)     | `[n_hi, n_lo]`, dlc = 2 — page number (AVR) / block number (PIC), byte address = n × page size |
-| `PAGE_FILL_NEXT` (5) | `[rem_hi, rem_lo]` — bytes still missing in the current page |
-| `PAGE_FILL` (3)      | exactly 8 bytes of the image, in flash order (dlc = 8) |
-| `PAGE_WRITED` (6)    | AVR: `[a_hi, a_lo]` — byte address of the page (low 16 bits, so it wraps above 64 KB on AT90CAN128); PIC: `[n_hi, n_lo]` — block number |
+| `PAGE_FILL_NEXT` (5) | `[rem_hi, rem_lo]` — bytes still missing in the current page; `seqnum` = number of this request for data |
+| `PAGE_FILL` (3)      | exactly 8 bytes of the image, in flash order (dlc = 8); `seqnum` copied from the `PAGE_FILL_NEXT` it answers |
+| `PAGE_WRITED` (6)    | `[n_hi, n_lo]` — number of the written page (AVR) / block (PIC), the same as in `PAGE_START` |
 | `PAGE_FILL_BREAK` (7)| dlc = 0 — the page was abandoned |
 | `QUIT_BOOTLOADER` (2)| dlc = 0 — start the application |
 
 - `PAGE_START` erases the page.
-- Any other bootloader frame from the host during a page fill (including a `PAGE_FILL` with
-  dlc ≠ 8) aborts it with `PAGE_FILL_BREAK`; the page stays erased, the host starts it again
-  with `PAGE_START`.
-- The bootloader answers only the node that sent `PAGE_START`.
-- The `seqnum` of bootloader responses is not meaningful.
-- The image must not overlap the bootloader area (the bootloader does not protect itself; the
-  AVR boot section can be locked with the `BLB1x` lock bits).
+- The page size is the `rem` of the first `PAGE_FILL_NEXT` of a page.
+- Every new `PAGE_FILL_NEXT` gets the next `seqnum` (5 bits, wraps). The bootloader accepts only a
+  `PAGE_FILL` (dlc = 8) with the `seqnum` of its last `PAGE_FILL_NEXT`, other `PAGE_FILL` frames
+  (duplicates, late frames) are ignored.
+- A receive timeout during a page fill (about 1–2 s, a frame lost in either direction) repeats the
+  last `PAGE_FILL_NEXT` with the same `seqnum`, the host answers it again with the data at
+  `page size - rem`. Data is never written twice nor shifted. After 4 timeouts in a row the page is
+  abandoned with `PAGE_FILL_BREAK`.
+- Any other bootloader frame from the host during a page fill (e.g. `PAGE_START`) aborts it with
+  `PAGE_FILL_BREAK`; the page stays erased.
+- After `PAGE_FILL_BREAK` the bootloader waits for `PAGE_START` and re-sends
+  `BOOTLOADER_TURNED_ON` after each receive timeout; the host starts the page again (from its first byte).
+- The first accepted `PAGE_START` locks the host: from then on frames from other nodes are ignored
+  (`PAGE_START`, `QUIT_BOOTLOADER` and `PAGE_FILL`). Before that `QUIT_BOOTLOADER` is accepted from
+  any node.
+- `PAGE_START` of a page that overlaps the bootloader area (AVR: ≥ `BOOTSTART`, PIC: ≥ 0xF600) is
+  ignored. Pages are numbered from the start of the application area (on AVR and PIC the start of flash).
+- The `seqnum` of `PAGE_WRITED` and `PAGE_FILL_BREAK` is not meaningful.
 
-The h9d tool `h9fwupload` implements the host side: it waits for `BOOTLOADER_TURNED_ON` from
-the node, uploads the pages in order and sends `QUIT_BOOTLOADER` after the last one.
+The h9d tool `h9fwupload` implements the host side. It only answers the bootloader (the bootloader
+repeats its responses): `PAGE_FILL` for `PAGE_FILL_NEXT`, `PAGE_START` of the current page for
+`PAGE_FILL_BREAK` and `BOOTLOADER_TURNED_ON`, `PAGE_START` of the next page (or `QUIT_BOOTLOADER`
+after the last one) for `PAGE_WRITED` with the expected page number. Then it waits for
+`NODE_TURNED_ON` and repeats `QUIT_BOOTLOADER` on `BOOTLOADER_TURNED_ON`. It fails when the node
+sends nothing for 10 s. With debug logging (`-vvv`) it prints transfer statistics at the end: node
+timeouts (a response later than 500 ms means the bootloader repeated it, i.e. a frame was lost —
+`PAGE_FILL` when the repeated `PAGE_FILL_NEXT` has the already answered `seqnum`, `PAGE_FILL_NEXT`
+otherwise), duplicated responses, page restarts, ignored frames and the longest response time.
 
 ---
 

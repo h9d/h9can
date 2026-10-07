@@ -96,6 +96,7 @@ foreach (mmcu IN LISTS avr_mmcus)
         target_compile_options(${TARGET} PRIVATE
                 -mmcu=${mmcu}
                 -DF_CPU=${fcpu_${freq}}
+                -DBOOTSTART=${bootstart_${mmcu}}
                 -Os
                 -gdwarf-2
                 -funsigned-char
