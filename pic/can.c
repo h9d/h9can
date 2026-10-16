@@ -14,12 +14,21 @@
 #include "h9def.h"
 
 #include "h9pic/common.h"
+#include "h9pic/mcu.h"
+#ifdef H9PIC_Q84
+#include "h9pic/canfd.h"
+#endif
 
 #define CAN_RX_BUF_SIZE 16
 #define CAN_RX_BUF_INDEX_MASK 0x0F
 
+#ifdef H9PIC_Q84
+#define CAN_MODE_NORMAL CANFD_MODE_NORMAL_20
+#define CAN_MODE_CONFIG CANFD_MODE_CONFIG
+#else
 #define CAN_MODE_NORMAL 0x00
 #define CAN_MODE_CONFIG 0x80
+#endif
 
 
 static struct {
@@ -60,7 +69,7 @@ volatile uint8_t can_rx_buf_top = 0;
 volatile uint8_t can_rx_buf_bottom = 0;
 static volatile uint8_t can_rx_buf_overflow = 0;
 
-#define BOOTLOADER_ADDR 0xF600      // pic_bootloader code offset
+#define BOOTLOADER_ADDR H9PIC_BOOTLOADER_ADDR
 
 void (*read_power_supply_register)(uint8_t, uint8_t) = NULL;
 
@@ -78,6 +87,29 @@ static uint8_t process_msg(h9frame_t *cm);
 static void can_set_mode(uint8_t mode);
 
 
+#ifdef H9PIC_Q84
+static void can_rx_fifo(uint8_t fifo) {
+    while (canfd_rx_pending(fifo)) {
+        uint8_t next_top = (uint8_t)((can_rx_buf_top + 1) & CAN_RX_BUF_INDEX_MASK);
+        if (next_top == can_rx_buf_bottom) {
+            can_rx_buf_overflow = 1;
+            CANFD_FIFO_REG(fifo, CANFD_FIFOCON_H) |= CANFD_FIFOCON_UINC;   // drop the frame
+        }
+        else {
+            can_buf_t *b = &can_rx_buf[can_rx_buf_top];
+            b->txbDLC = canfd_rx_read(fifo, &b->txbSIDH, b->data);
+            can_rx_buf_top = next_top;
+        }
+    }
+}
+
+void can_interrupt(void) {
+    if (PIE4bits.CANRXIE && PIR4bits.CANRXIF) {     // cleared by hardware when the RX FIFOs are empty
+        can_rx_fifo(CANFD_FIFO_RX_UNICAST);
+        can_rx_fifo(CANFD_FIFO_RX_BROADCAST);
+    }
+}
+#else
 void can_interrupt(void) {
     if (PIE5bits.RXB0IE && PIR5bits.RXB0IF) {
         PIR5bits.RXB0IF = 0;
@@ -131,6 +163,7 @@ void can_interrupt(void) {
     }
     
 }
+#endif
 
 uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint8_t pcb_rev, uint8_t bom_rev, uint16_t version_major, uint16_t version_minor, uint16_t version_patch, const char *build_info) {
     uint8_t ret = 1;
@@ -142,6 +175,21 @@ uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint8_t pcb_rev, uint8_
 //        reset_reason = NODE_RESET_BY_STACK_UNDERFLOW;
 //        STKPTRbits.STKUNF = 0;
 //    }
+#ifdef H9PIC_Q84
+    if (!PCON0bits.nPOR) {
+        node_info.flags.reset_reason = NODE_RESET_BY_POWER_ON;
+    } else if (!PCON0bits.nRWDT) {
+        node_info.flags.reset_reason = NODE_RESET_BY_WATCHDOG;
+    } else if (!PCON0bits.nBOR) {
+        node_info.flags.reset_reason = NODE_RESET_BY_BROWN_OUT;
+    } else if (!PCON0bits.nRI) {
+        node_info.flags.reset_reason = NODE_RESET_BY_SOFTWARE;
+    } else {
+        node_info.flags.reset_reason = NODE_RESET_BY_UNKNOWN;
+    }
+
+    PCON0 = 0x3F;   // reset the flags (nWDTWV, nRWDT, nRMCLR, nRI, nPOR, nBOR), clear STKOVF/STKUNF
+#else
     if (!RCONbits.POR && !RCONbits.BOR) {
         node_info.flags.reset_reason = NODE_RESET_BY_POWER_ON;    // POR=0, BOR=0 → power-on
     } else if (RCONbits.TO == 0) {
@@ -160,6 +208,7 @@ uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint8_t pcb_rev, uint8_
     RCONbits.POR = 1;
     RCONbits.BOR = 1;
     RCONbits.RI  = 1;
+#endif
     
     node_info.node_type = node_type;
     node_info.pcb_revision = pcb_rev;
@@ -183,6 +232,30 @@ uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint8_t pcb_rev, uint8_
         node_info.flags.bl_present = 1;
         node_info.flags.bl_mismatch = bl.node_type != node_type || bl.pcb_rev != pcb_rev || bl.bom_rev != bom_rev;
     }
+#ifdef H9PIC_Q84
+    canfd_init();
+
+    // filter 0 -> FIFO 1: unicast to this node
+    uint8_t mask[4], id[4];
+    calc_can_unicast_id(&mask[0], &mask[1], &mask[2], &mask[3], H9FRAME_UNICAST_MSG_TYPE_GROUP_MASK, 0, 0, H9FRAME_ID_MASK, 0);
+    calc_can_unicast_id(&id[0], &id[1], &id[2], &id[3], H9FRAME_UNICAST_MSG_TYPE_GROUP, 0, 0, node_info.node_id, 0);
+    canfd_set_filter(0, CANFD_FIFO_RX_UNICAST, id, mask);
+
+    // filters 1-4 -> FIFO 2: all broadcast types (16-31) for a given group; DISCOVER/GROUP_RESET are picked out in process_msg
+    // (filters 3, 4 are placeholders until CAN_set_msg_filter_1/2)
+    calc_can_broadcast_id(&mask[0], &mask[1], &mask[2], &mask[3], H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, H9FRAME_NODE_TYPE_MASK);
+    calc_can_broadcast_id(&id[0], &id[1], &id[2], &id[3], H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, 0, H9FRAME_BROADCAST_ALL_GROUP);
+    canfd_set_filter(1, CANFD_FIFO_RX_BROADCAST, id, mask);
+    calc_can_broadcast_id(&id[0], &id[1], &id[2], &id[3], H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, 0, node_type);
+    canfd_set_filter(2, CANFD_FIFO_RX_BROADCAST, id, mask);
+    canfd_set_filter(3, CANFD_FIFO_RX_BROADCAST, id, mask);
+    canfd_set_filter(4, CANFD_FIFO_RX_BROADCAST, id, mask);
+
+    C1INTUbits.RXIE = 1;
+    PIR4bits.CANRXIF = 0;
+    IPR4bits.CANRXIP = 0;   //low priority
+    PIE4bits.CANRXIE = 1;
+#else
     TRISBbits.TRISB2 = 1; //CANTX ax output
     TRISBbits.TRISB3 = 1; //CANRX ax input
     
@@ -231,6 +304,7 @@ uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint8_t pcb_rev, uint8_
     
     RXB0CON = 0b01000000;
     RXB1CON = 0b01000000;
+#endif
 
     can_set_mode(CAN_MODE_NORMAL);
 
@@ -238,13 +312,33 @@ uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint8_t pcb_rev, uint8_
 }
 
 uint8_t CAN_bus_error_warning(void) {
+#ifdef H9PIC_Q84
+    return C1TRECUbits.TXWARN | C1TRECUbits.RXWARN;
+#else
     return COMSTATbits.TXWARN | COMSTATbits.RXWARN;
+#endif
 }
 
 void CAN_send_turned_on_broadcast(void) {
     CAN_send_node_info_broadcast(H9FRAME_TYPE_NODE_TURNED_ON);
 }
 
+#ifdef H9PIC_Q84
+static void set_broadcast_filter(uint8_t filter, uint16_t broadcast_group) {
+    uint8_t mask[4], id[4];
+    calc_can_broadcast_id(&mask[0], &mask[1], &mask[2], &mask[3], H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, H9FRAME_NODE_TYPE_MASK);
+    calc_can_broadcast_id(&id[0], &id[1], &id[2], &id[3], H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, 0, broadcast_group);
+    canfd_set_filter(filter, CANFD_FIFO_RX_BROADCAST, id, mask);    // filters can be changed in Normal mode
+}
+
+void CAN_set_msg_filter_1(uint16_t broadcast_group) {
+    set_broadcast_filter(3, broadcast_group);
+}
+
+void CAN_set_msg_filter_2(uint16_t broadcast_group) {
+    set_broadcast_filter(4, broadcast_group);
+}
+#else
 // Filter registers are writable in Configuration mode only
 void CAN_set_msg_filter_1(uint16_t broadcast_group) {
     can_set_mode(CAN_MODE_CONFIG);
@@ -257,6 +351,7 @@ void CAN_set_msg_filter_2(uint16_t broadcast_group) {
     calc_can_broadcast_id(&RXF5SIDH, &RXF5SIDL, &RXF5EIDH, &RXF5EIDL, H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, 0, broadcast_group);
     can_set_mode(CAN_MODE_NORMAL);
 }
+#endif
 
 uint8_t CAN_put_msg(h9frame_t *cm) {
     uint8_t tempEIDH = 0;
@@ -274,9 +369,38 @@ uint8_t CAN_put_msg(h9frame_t *cm) {
     else
         calc_can_unicast_id(&tempSIDH, &tempSIDL, &tempEIDH, &tempEIDL, cm->type, cm->source_id, cm->unicast.flags, cm->unicast.destination_id, cm->unicast.seqnum);
 
-    uint8_t gieh = INTCONbits.GIEH;
-    uint8_t giel = INTCONbits.GIEL;
+    uint8_t gieh = H9PIC_INTCON.GIEH;
+    uint8_t giel = H9PIC_INTCON.GIEL;
 
+#ifdef H9PIC_Q84
+    uint8_t id[4] = {tempSIDH, tempSIDL, tempEIDH, tempEIDL};
+    for (;;) {
+        H9PIC_INTCON.GIEH = 0;
+        H9PIC_INTCON.GIEL = 0;
+
+        if (canfd_tx_ready()) {
+            canfd_tx_write(id, cm->dlc, cm->data);
+            break;
+        }
+        else if (C1TRECUbits.RXBP || C1TRECUbits.TXBP || C1TRECUbits.TXBO) {   //bus passive / bus off error
+            canfd_tx_flush();
+
+            uint8_t fault_id[4];
+            uint8_t fault_data[8] = {NODE_FAULT_CAN_FRAME_LOSS};
+            calc_can_broadcast_id(&fault_id[0], &fault_id[1], &fault_id[2], &fault_id[3], H9FRAME_TYPE_NODE_FAULT, node_info.node_id, node_info.node_type);
+            canfd_tx_write(fault_id, 1, fault_data);    // waits in the TX FIFO, sent automatically after bus-off recovery
+            node_info.flags.can_tx_frame_loss = 1;      // interrupts disabled here
+
+            H9PIC_INTCON.GIEH = gieh;
+            H9PIC_INTCON.GIEL = giel;
+            return 0;
+        }
+
+        // TX FIFO full: re-enable interrupts so RX keeps being serviced while waiting
+        H9PIC_INTCON.GIEH = gieh;
+        H9PIC_INTCON.GIEL = giel;
+    }
+#else
     for (;;) {
         INTCONbits.GIEH = 0;
         INTCONbits.GIEL = 0;
@@ -357,9 +481,10 @@ uint8_t CAN_put_msg(h9frame_t *cm) {
         INTCONbits.GIEH = gieh;
         INTCONbits.GIEL = giel;
     }
+#endif
 
-    INTCONbits.GIEH = gieh;
-    INTCONbits.GIEL = giel;
+    H9PIC_INTCON.GIEH = gieh;
+    H9PIC_INTCON.GIEL = giel;
 
     return 1;
 }
@@ -391,21 +516,32 @@ void send_node_fault(uint8_t errno) {
 // -- -- -- | ty_(1) ty ty ty ty so so so | so so so **  1 ** so so | nt nt nt nt nt nt nt nt | nt nt nt nt nt nt nt nt
 uint8_t CAN_get_msg(h9frame_t* cm) {
     if (CAN_bus_error_warning()) {
-        uint8_t gieh = INTCONbits.GIEH;     // flags are also set from interrupts, keep the read-modify-write atomic
-        INTCONbits.GIEH = 0;
+        uint8_t gieh = H9PIC_INTCON.GIEH;     // flags are also set from interrupts, keep the read-modify-write atomic
+        H9PIC_INTCON.GIEH = 0;
         node_info.flags.can_error_warning = 1;
-        INTCONbits.GIEH = gieh;
+        H9PIC_INTCON.GIEH = gieh;
     }
 
+#ifdef H9PIC_Q84
+    // RX frame lost: software buffer full or hardware RX FIFO overflow
+    uint8_t hw_overflow = (CANFD_FIFO_REG(CANFD_FIFO_RX_UNICAST, CANFD_FIFOSTA_L) | CANFD_FIFO_REG(CANFD_FIFO_RX_BROADCAST, CANFD_FIFOSTA_L)) & CANFD_FIFOSTA_RXOVIF;
+#else
     // RX frame lost: software buffer full or hardware RXB0/RXB1 overflow
-    if (can_rx_buf_overflow || COMSTATbits.RXB0OVFL || COMSTATbits.RXB1OVFL) {
+    uint8_t hw_overflow = COMSTATbits.RXB0OVFL || COMSTATbits.RXB1OVFL;
+#endif
+    if (can_rx_buf_overflow || hw_overflow) {
         can_rx_buf_overflow = 0;
-        uint8_t gieh = INTCONbits.GIEH;
-        INTCONbits.GIEH = 0;
+        uint8_t gieh = H9PIC_INTCON.GIEH;
+        H9PIC_INTCON.GIEH = 0;
         node_info.flags.can_rx_frame_loss = 1;
-        INTCONbits.GIEH = gieh;
+        H9PIC_INTCON.GIEH = gieh;
+#ifdef H9PIC_Q84
+        CANFD_FIFO_REG(CANFD_FIFO_RX_UNICAST, CANFD_FIFOSTA_L) &= (uint8_t)~CANFD_FIFOSTA_RXOVIF;
+        CANFD_FIFO_REG(CANFD_FIFO_RX_BROADCAST, CANFD_FIFOSTA_L) &= (uint8_t)~CANFD_FIFOSTA_RXOVIF;
+#else
         COMSTATbits.RXB0OVFL = 0;
         COMSTATbits.RXB1OVFL = 0;
+#endif
         send_node_fault(NODE_FAULT_CAN_RX_FRAME_LOSS);
     }
 
@@ -575,8 +711,13 @@ static void CAN_send_node_info_broadcast(uint8_t type) {
 }
 
 static void can_set_mode(uint8_t mode) {
+#ifdef H9PIC_Q84
+    canfd_set_mode(mode);
+    
+#else
     CANCON = mode;
     while ((CANSTAT & 0xE0) != mode);
+#endif
 }
 
 static uint32_t read_serial_numer(void) {
@@ -648,7 +789,7 @@ static void process_standard_reg(h9frame_t *cm) {
                 return;
             }
             case NODE_MCU_TYPE_STD_REGISTER:
-                send_reg_value1(NODE_MCU_TYPE_STD_REGISTER, cm->source_id, cm->unicast.seqnum, NODE_MCU_PIC18F46K80);
+                send_reg_value1(NODE_MCU_TYPE_STD_REGISTER, cm->source_id, cm->unicast.seqnum, H9PIC_NODE_MCU);
                 return;
             case NODE_SN_STD_REGISTER: {
                 uint32_t sn = read_serial_numer();
@@ -722,8 +863,8 @@ static uint8_t process_msg(h9frame_t *cm) {
             return 0;
         }
         else if (cm->type == H9FRAME_TYPE_NODE_UPGRADE && cm->dlc == 0) {
-            INTCONbits.PEIE = 0;
-            INTCONbits.GIE = 0;
+            H9PIC_INTCON.GIEL = 0;
+            H9PIC_INTCON.GIEH = 0;
             STKPTR = 0x00;
             asm ("goto " ___mkstr(BOOTLOADER_ADDR));
             return 0;

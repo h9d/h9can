@@ -507,7 +507,7 @@ void test_std_reg_mcu_type_read(void) {
     TEST_ASSERT_EQUAL_INT(7,                                   g_sent[0].unicast.seqnum);
     TEST_ASSERT_EQUAL_INT(NODE_MCU_TYPE_STD_REGISTER,          g_sent[0].data[0]);
     TEST_ASSERT_GREATER_OR_EQUAL_INT8(NODE_MCU_ATMEGA16M1,     g_sent[0].data[1]);
-    TEST_ASSERT_LESS_OR_EQUAL_INT8(NODE_MCU_PIC18F46K80,       g_sent[0].data[1]);
+    TEST_ASSERT_LESS_OR_EQUAL_INT8(NODE_MCU_PIC18F47Q84,       g_sent[0].data[1]);
     TEST_ASSERT_EQUAL_INT(2,                                   g_sent[0].dlc);
 }
 

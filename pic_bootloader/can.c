@@ -14,7 +14,64 @@
 
 uint8_t can_node_id = 255;
 
-static uint8_t process_msg(h9frame_t *cm);
+#if defined(_18FXXQ84_FAMILY_)
+#include <h9pic/canfd.h>
+
+void CAN_init(void) {
+    can_node_id = read_node_id();
+
+    canfd_init();
+
+    // filter 0 -> FIFO 1: bootloader frames to this node
+    uint8_t mask[4], id[4];
+    calc_can_unicast_id(&mask[0], &mask[1], &mask[2], &mask[3], H9FRAME_BOOTLOADER_MSG_TYPE_GROUP_MASK, 0, 0, H9FRAME_ID_MASK, 0);
+    calc_can_unicast_id(&id[0], &id[1], &id[2], &id[3], H9FRAME_BOOTLOADER_MSG_TYPE_GROUP, 0, 0, can_node_id, 0);
+    canfd_set_filter(0, CANFD_FIFO_RX_UNICAST, id, mask);
+
+    canfd_set_mode(CANFD_MODE_NORMAL_20);
+}
+
+void CAN_put_msg_blocking(h9frame_t *cm) {
+    uint8_t id[4];
+
+    while (!canfd_tx_ready());
+
+    cm->source_id = can_node_id;
+
+    if (cm->type & H9FRAME_UNICAST_BROADCAST_BIT) {
+        calc_can_broadcast_id(&id[0], &id[1], &id[2], &id[3], cm->type, cm->source_id, cm->broadcast.group);
+    }
+    else
+        calc_can_unicast_id(&id[0], &id[1], &id[2], &id[3], cm->type, cm->source_id, cm->unicast.flags, cm->unicast.destination_id, cm->unicast.seqnum);
+
+    canfd_tx_write(id, cm->dlc, cm->data);
+}
+
+/**
+ * @warning Support only unicast frame!
+ */
+uint8_t CAN_get_msg_blocking(h9frame_t *cm) {
+    uint24_t timeout_counter = 0x1fffff;
+
+    while (timeout_counter) {
+        if (canfd_rx_pending(CANFD_FIFO_RX_UNICAST)) {
+            uint8_t id[4];
+            cm->dlc = canfd_rx_read(CANFD_FIFO_RX_UNICAST, id, cm->data);
+
+            cm->type = id[0] >> 3;
+            cm->source_id = (uint8_t)(id[0] << 5) | (uint8_t)(id[1] >> 3 & 0x1c) | (uint8_t)(id[1] & 0x03);
+
+            cm->unicast.flags = id[2] >> 5;
+            cm->unicast.destination_id = (uint8_t)(id[2] << 3) | (uint8_t)(id[3] >> 5);
+            cm->unicast.seqnum = id[3] & 0x1f;
+            return 1;
+        }
+        --timeout_counter;
+    }
+    return 0;
+}
+
+#else
 
 
 void CAN_init(void) {
@@ -108,3 +165,4 @@ uint8_t CAN_get_msg_blocking(h9frame_t *cm) {
     }
     return 0;
 }
+#endif

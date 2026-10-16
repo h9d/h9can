@@ -11,6 +11,57 @@
 
 #include <xc.h>
 
+#if defined(_18FXXQ84_FAMILY_)
+// PIC18F47Q84 Configuration Bit Settings
+// Must be identical to the application config bits (both hex files are merged).
+
+// CONFIG1
+#pragma config FEXTOSC = HS     // External Oscillator Selection (HS (crystal oscillator) above 8 MHz)
+#pragma config RSTOSC = EXTOSC  // Reset Oscillator Selection (EXTOSC operating per FEXTOSC bits)
+
+// CONFIG2
+#pragma config CLKOUTEN = OFF   // Clock out Enable bit (CLKOUT function is disabled)
+#pragma config PR1WAY = ON      // PRLOCKED One-Way Set Enable bit
+#pragma config CSWEN = ON       // Clock Switch Enable bit
+#pragma config JTAGEN = OFF     // JTAG Enable bit (JTAG pins revert to user functions)
+#pragma config FCMEN = OFF      // Fail-Safe Clock Monitor Enable bit
+#pragma config FCMENP = OFF
+#pragma config FCMENS = OFF
+
+// CONFIG3
+#pragma config MCLRE = EXTMCLR  // MCLR Enable bit
+#pragma config PWRTS = PWRT_64  // Power-up timer selection bits (64 ms)
+#pragma config MVECEN = OFF     // Multi-vector enable bit (legacy high/low priority vectors 0x08/0x18)
+#pragma config IVT1WAY = ON
+#pragma config LPBOREN = OFF
+#pragma config BOREN = SBORDIS  // Brown-out Reset enabled, SBOREN bit is ignored
+
+// CONFIG4
+#pragma config BORV = VBOR_2P85 // Brown-out Reset Voltage (2.8V, highest available)
+#pragma config ZCD = OFF
+#pragma config PPS1WAY = OFF    // PPS registers can be changed repeatedly (bootloader and application)
+#pragma config STVREN = ON      // Stack full/underflow will cause Reset
+#pragma config LVP = ON         // Low voltage programming enabled (no PGM pin on this device)
+#pragma config XINST = OFF
+
+// CONFIG5
+#pragma config WDTE = OFF       // WDT Disabled
+
+// CONFIG7
+#pragma config BBEN = OFF       // Boot block disabled
+#pragma config SAFEN = OFF      // SAF disabled
+
+// CONFIG8
+#pragma config WRTB = OFF
+#pragma config WRTC = OFF
+#pragma config WRTD = OFF
+#pragma config WRTSAF = OFF
+#pragma config WRTAPP = OFF
+
+// CONFIG10
+#pragma config CP = OFF
+
+#else
 // PIC18F46K80 Configuration Bit Settings
 
 // 'C' source line config statements
@@ -75,6 +126,7 @@
 
 // CONFIG7H
 #pragma config EBTRB = OFF      // Table Read Protect Boot (Disabled)
+#endif
 
 #define _XTAL_FREQ 16000000
 
