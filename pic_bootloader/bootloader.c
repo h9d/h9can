@@ -11,7 +11,7 @@
 #include <xc.h>
 #include "can.h"
 #include <h9pic/bl_info.h>
-#include <h9pic/mcu.h>
+#include <h9def.h>
 
 #include "version.h"
 
@@ -66,7 +66,7 @@ static void read_page(uint24_t page_addr) {
 }
 
 static void write_page(uint24_t page_addr) {
-    if (page_addr >= H9PIC_BOOTLOADER_ADDR)     // never erase the bootloader itself
+    if (page_addr >= 0x1E000)                   // never erase the bootloader itself (code offset)
         return;
 
     nvm_set_addr(page_addr);
@@ -83,7 +83,7 @@ static void write_page(uint24_t page_addr) {
     NVMCON1bits.CMD = 0x00;
 }
 
-void write_block(uint16_t block, uint8_t dst_id) {
+static void write_block(uint16_t block, uint8_t dst_id) {
     uint16_t bytes_remain = FLASH_BLOCK_SIZE;
     uint24_t tblptr = (uint24_t)block * FLASH_BLOCK_SIZE;
     uint24_t page_addr = tblptr & ~(uint24_t)(FLASH_PAGE_SIZE - 1);
@@ -134,7 +134,7 @@ void write_block(uint16_t block, uint8_t dst_id) {
     }
 }
 #else
-void StartWrite(void) {
+static void start_write(void) {
     EECON2 = 0x55;
     EECON2 = 0xAA;
     EECON1bits.WR = 1;       // Start the write
@@ -142,13 +142,13 @@ void StartWrite(void) {
     NOP();
 }
 
-void erase_block(uint24_t tblptr) {
+static void erase_block(uint24_t tblptr) {
     TBLPTR = tblptr;
     EECON1 = 0x94;       // Setup writes
-    StartWrite();
+    start_write();
 }
 
-void write_block(uint16_t block, uint8_t dst_id) {
+static void write_block(uint16_t block, uint8_t dst_id) {
     uint16_t bytes_remain = FLASH_BLOCK_SIZE;
     uint24_t tblptr = block * FLASH_BLOCK_SIZE;
 
@@ -179,7 +179,7 @@ void write_block(uint16_t block, uint8_t dst_id) {
                 cm_res.data[1] = (block) & 0xff;
 
                 asm("TBLRD *-");
-                StartWrite();
+                start_write();
                 //asm("TBLRD *+");
                 EECON1bits.WREN = 0;
                 CAN_put_msg_blocking(&cm_res);
@@ -205,8 +205,13 @@ void write_block(uint16_t block, uint8_t dst_id) {
 #endif
 
 void main(void) {
-    H9PIC_INTCON.GIEL = 0;
-    H9PIC_INTCON.GIEH = 0;
+#if defined(_18FXXQ84_FAMILY_)
+    INTCON0bits.GIEL = 0;
+    INTCON0bits.GIEH = 0;
+#else
+    INTCONbits.GIEL = 0;
+    INTCONbits.GIEH = 0;
+#endif
     CAN_init();
     
     h9frame_t turn_on_msg;
@@ -224,7 +229,13 @@ void main(void) {
 
     turn_on_msg.data[4] = PCB_REVISION;
     turn_on_msg.data[5] = BOM_REVISION;
-    turn_on_msg.data[6] = H9PIC_NODE_MCU;
+#if defined(_18F47Q84)
+    turn_on_msg.data[6] = NODE_MCU_PIC18F47Q84;
+#elif defined(_18F46K80)
+    turn_on_msg.data[6] = NODE_MCU_PIC18F46K80;
+#else
+#error "Unknow node MCU"
+#endif
 #if _XTAL_FREQ == 16000000
     turn_on_msg.data[7] = NODE_MCU_F_16MHz;
 #else

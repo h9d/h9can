@@ -1,69 +1,14 @@
 #include "h9pic/ee_mem.h"
 
+// data EEPROM byte access, implemented in pic/18F46K80/eeprom.c and pic/18FXXQ84/eeprom.c
+void eeprom_write_byte(uint16_t addr, uint8_t data);
+uint8_t eeprom_read_byte(uint16_t addr);
+
+
 #define ROUND_UP_4(x)          (((x) + 3u) & ~3u)
 #define SECTOR_ADDRES(base, offset, size) (base + (((offset * 3) & 0x0f) * (ROUND_UP_4(size) + 4)))
 #define COUNTER_VALID_WINDOW  (128u - SECTOR_NUMBER)   /* 112 */
 
-#if defined(_18FXXQ84_FAMILY_)
-// Data EEPROM at 0x380000 in the NVM address space
-static void eeprom_write_byte(uint16_t addr, uint8_t data) {
-    uint8_t GIEBitValue = INTCON0bits.GIE;
-    NVMADRU = 0x38;
-    NVMADRH = ((addr >> 8) & 0x03);
-    NVMADRL = (addr & 0xFF);
-    NVMDATL = data;
-    NVMCON1bits.CMD = 0x03;     // write byte
-    INTCON0bits.GIE = 0;        // Disable interrupts
-    NVMLOCK = 0x55;
-    NVMLOCK = 0xAA;
-    NVMCON0bits.GO = 1;
-    // Wait for write to complete
-    while (NVMCON0bits.GO);
-    INTCON0bits.GIE = GIEBitValue;  // restore interrupt enable
-    NVMCON1bits.CMD = 0x00;
-}
-
-static uint8_t eeprom_read_byte(uint16_t addr) {
-    NVMADRU = 0x38;
-    NVMADRH = ((addr >> 8) & 0x03);
-    NVMADRL = (addr & 0xFF);
-    NVMCON1bits.CMD = 0x00;     // read byte
-    NVMCON0bits.GO = 1;
-    while (NVMCON0bits.GO);
-
-    return NVMDATL;
-}
-#else
-static void eeprom_write_byte(uint16_t addr, uint8_t data) {
-    uint8_t GIEBitValue = INTCONbits.GIE;
-    EEADRH = ((addr >> 8) & 0x03);
-    EEADR = (addr & 0xFF);
-    EEDATA = data;
-    EECON1bits.EEPGD = 0;
-    EECON1bits.CFGS = 0;
-    EECON1bits.WREN = 1;
-    INTCONbits.GIE = 0;     // Disable interrupts
-    EECON2 = 0x55;
-    EECON2 = 0xAA;
-    EECON1bits.WR = 1;
-    // Wait for write to complete
-    while (EECON1bits.WR);
-    EECON1bits.WREN = 0;
-    INTCONbits.GIE = GIEBitValue;   // restore interrupt enable
-}
-
-static uint8_t eeprom_read_byte(uint16_t addr) {
-    EEADRH = ((addr >> 8) & 0x03);
-    EEADR = (addr & 0xFF);
-    EECON1bits.CFGS = 0;
-    EECON1bits.EEPGD = 0;
-    EECON1bits.RD = 1;
-    NOP();  // NOPs may be required for latency at high frequencies
-    NOP();
-
-    return (EEDATA);
-}
-#endif
 
 // write only if the value changes (less wear)
 static void eeprom_update_byte(uint16_t addr, uint8_t data) {

@@ -17,6 +17,8 @@ endforeach()
 
 set(h9pic_bootloader_default_default_XC8_FILE_TYPE_compile
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../../pic/ee_mem.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../pic/18F46K80/eeprom.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../pic/18FXXQ84/eeprom.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../bootloader.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../can.c")
 set_source_files_properties(${h9pic_bootloader_default_default_XC8_FILE_TYPE_compile} PROPERTIES LANGUAGE C)

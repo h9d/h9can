@@ -366,6 +366,8 @@
             "files": [
                 "Makefile",
                 "../pic/ee_mem.c",
+                "../pic/18F46K80/eeprom.c",
+                "../pic/18FXXQ84/eeprom.c",
                 "*.c",
                 "*.h"
             ],

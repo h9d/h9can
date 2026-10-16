@@ -31,7 +31,7 @@
 // CONFIG3
 #pragma config MCLRE = EXTMCLR  // MCLR Enable bit
 #pragma config PWRTS = PWRT_64  // Power-up timer selection bits (64 ms)
-#pragma config MVECEN = OFF     // Multi-vector enable bit (legacy high/low priority vectors 0x08/0x18)
+#pragma config MVECEN = ON      // Multi-vector enable bit (interrupt vector table at IVTBASE = 0x0008)
 #pragma config IVT1WAY = ON
 #pragma config LPBOREN = OFF
 #pragma config BOREN = SBORDIS  // Brown-out Reset enabled, SBOREN bit is ignored
