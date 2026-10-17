@@ -14,7 +14,7 @@
 extern void (*read_power_supply_register)(uint8_t destination_id, uint8_t seqnum);
 
 #if defined(_18F66K80_FAMILY_)
-// Call from the low priority ISR (on PIC18F-Q84 the library has its own vectored CANRX interrupt)
+// Call from the low priority ISR (PIC18F-Q84: no RX interrupt, frames are read from the hardware FIFOs by CAN_get_msg)
 void can_interrupt(void);
 #endif
 

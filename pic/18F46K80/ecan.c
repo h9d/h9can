@@ -14,6 +14,28 @@
 #define CAN_MODE_NORMAL 0x00
 #define CAN_MODE_CONFIG 0x80
 
+// ECAN has only two RX buffers (RXB0, RXB1): frames are moved by can_interrupt() to a software buffer
+#define CAN_RX_BUF_SIZE 16
+#define CAN_RX_BUF_INDEX_MASK 0x0F
+
+static can_buf_t can_rx_buf[CAN_RX_BUF_SIZE];
+static volatile uint8_t can_rx_buf_top = 0;
+static volatile uint8_t can_rx_buf_bottom = 0;
+static volatile uint8_t can_rx_buf_overflow = 0;
+
+// free RX buffer slot or NULL when the buffer is full (frame loss is reported)
+static can_buf_t *can_rx_slot(void) {
+    if (((can_rx_buf_top + 1) & CAN_RX_BUF_INDEX_MASK) == can_rx_buf_bottom) {
+        can_rx_buf_overflow = 1;
+        return NULL;
+    }
+    return &can_rx_buf[can_rx_buf_top];
+}
+
+static void can_rx_commit(void) {
+    can_rx_buf_top = (uint8_t)((can_rx_buf_top + 1) & CAN_RX_BUF_INDEX_MASK);
+}
+
 static void can_set_mode(uint8_t mode) {
     CANCON = mode;
     while ((CANSTAT & 0xE0) != mode);
@@ -137,9 +159,18 @@ uint8_t can_hw_bus_error(void) {
     return COMSTATbits.RXBP == 1 || COMSTATbits.TXBP == 1 || COMSTATbits.TXBO == 1;
 }
 
+uint8_t can_hw_rx(can_buf_t *frame) {
+    if (can_rx_buf_top == can_rx_buf_bottom)
+        return 0;
+    *frame = can_rx_buf[can_rx_buf_bottom];
+    can_rx_buf_bottom = (uint8_t)((can_rx_buf_bottom + 1) & CAN_RX_BUF_INDEX_MASK);
+    return 1;
+}
+
 uint8_t can_hw_rx_overflow(void) {
-    uint8_t overflow = COMSTATbits.RXB0OVFL || COMSTATbits.RXB1OVFL;
+    uint8_t overflow = can_rx_buf_overflow || COMSTATbits.RXB0OVFL || COMSTATbits.RXB1OVFL;
     if (overflow) {
+        can_rx_buf_overflow = 0;
         COMSTATbits.RXB0OVFL = 0;
         COMSTATbits.RXB1OVFL = 0;
     }
@@ -163,7 +194,10 @@ static void tx_write_txb2(const uint8_t *id, uint8_t dlc, const uint8_t *data) {
     TXB2CONbits.TXREQ = 1;
 }
 
-uint8_t can_hw_tx(const uint8_t *id, uint8_t dlc, const uint8_t *data) {
+// urgent is not used, all frames go through TXB0-TXB2
+uint8_t can_hw_tx(const uint8_t *id, uint8_t dlc, const uint8_t *data, uint8_t urgent) {
+    (void)urgent;
+
     if (TXB0CONbits.TXREQ != 1) {
         TXB0SIDH = id[0];
         TXB0SIDL = id[1];

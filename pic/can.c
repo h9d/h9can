@@ -16,9 +16,6 @@
 #include "h9pic/common.h"
 #include "hw.h"
 
-#define CAN_RX_BUF_SIZE 16
-#define CAN_RX_BUF_INDEX_MASK 0x0F
-
 
 static struct {
     uint8_t node_id;
@@ -44,11 +41,6 @@ static struct {
 } node_info;
 
 
-static can_buf_t can_rx_buf[CAN_RX_BUF_SIZE];
-static volatile uint8_t can_rx_buf_top = 0;
-static volatile uint8_t can_rx_buf_bottom = 0;
-static volatile uint8_t can_rx_buf_overflow = 0;
-
 void (*read_power_supply_register)(uint8_t, uint8_t) = NULL;
 
 static void calc_can_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, h9frame_t *cm);
@@ -63,18 +55,6 @@ static void CAN_send_node_info_broadcast(uint8_t type);
 static void process_standard_reg(h9frame_t *cm);
 static uint8_t process_msg(h9frame_t *cm);
 
-
-can_buf_t *can_rx_slot(void) {
-    if (((can_rx_buf_top + 1) & CAN_RX_BUF_INDEX_MASK) == can_rx_buf_bottom) {
-        can_rx_buf_overflow = 1;
-        return NULL;
-    }
-    return &can_rx_buf[can_rx_buf_top];
-}
-
-void can_rx_commit(void) {
-    can_rx_buf_top = (uint8_t)((can_rx_buf_top + 1) & CAN_RX_BUF_INDEX_MASK);
-}
 
 uint8_t CAN_init(uint16_t node_type, uint8_t default_id, uint8_t pcb_rev, uint8_t bom_rev, uint16_t version_major, uint16_t version_minor, uint16_t version_patch, const char *build_info) {
     uint8_t ret = 1;
@@ -135,7 +115,7 @@ void CAN_set_msg_filter_2(uint16_t broadcast_group) {
 uint8_t CAN_put_msg(h9frame_t *cm) {
     uint8_t id[4];
     
-    //TOTO: ujednolicic gdzie ma bys ustawiane source_id i broadcast.group
+    //TODO: ujednolicic gdzie ma bys ustawiane source_id i broadcast.group
     cm->source_id = node_info.node_id;
     
     if (cm->type & H9FRAME_UNICAST_BROADCAST_BIT) {
@@ -148,7 +128,7 @@ uint8_t CAN_put_msg(h9frame_t *cm) {
     for (;;) {
         uint8_t irq = mcu_irq_disable();
 
-        if (can_hw_tx(id, cm->dlc, cm->data)) {
+        if (can_hw_tx(id, cm->dlc, cm->data, cm->type == H9FRAME_TYPE_NODE_FAULT)) {
             mcu_irq_restore(irq);
             return 1;
         }
@@ -200,18 +180,16 @@ uint8_t CAN_get_msg(h9frame_t* cm) {
         mcu_irq_restore(irq);
     }
 
-    // RX frame lost: software buffer full or hardware RX overflow
-    uint8_t hw_overflow = can_hw_rx_overflow();
-    if (can_rx_buf_overflow || hw_overflow) {
-        can_rx_buf_overflow = 0;
+    if (can_hw_rx_overflow()) {
         uint8_t irq = mcu_irq_disable();
         node_info.flags.can_rx_frame_loss = 1;
         mcu_irq_restore(irq);
         send_node_fault(NODE_FAULT_CAN_RX_FRAME_LOSS);
     }
 
-    if (can_rx_buf_top != can_rx_buf_bottom) {
-        can_buf_t *b = &can_rx_buf[can_rx_buf_bottom];
+    can_buf_t frame;
+    if (can_hw_rx(&frame)) {
+        can_buf_t *b = &frame;
         cm->type = b->id[0] >> 3;
         cm->source_id = (uint8_t)(b->id[0] << 5) | (uint8_t)(b->id[1] >> 3 & 0x1c) | (uint8_t)(b->id[1] & 0x03);
         
@@ -227,8 +205,6 @@ uint8_t CAN_get_msg(h9frame_t* cm) {
         uint8_t idx = 0;
         for (; idx < 8; ++idx)
             cm->data[idx] = b->data[idx];
-
-        can_rx_buf_bottom = (uint8_t)((can_rx_buf_bottom + 1) & CAN_RX_BUF_INDEX_MASK);
 
         return process_msg(cm);
     }

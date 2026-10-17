@@ -5,10 +5,12 @@
  * Frame ids are built by calc_can_*_id (h9pic/common.h) in the ECAN SIDH/SIDL/EIDH/EIDL layout and
  * converted here.
  *
- * Message memory (TEF and TXQ disabled), 16 B per object (8 B header + 8 B payload):
- *   FIFO 1 - RX, unicast to this node (filter 0)
- *   FIFO 2 - RX, broadcasts (filters 1-4)
- *   FIFO 3 - TX
+ * Message memory (TEF disabled), 16 B per object (8 B header + 8 B payload), 832 B:
+ *   TXQ    - TX, 4 objects, NODE_FAULT frames (TXPRI 1, sent before FIFO 3)
+ *   FIFO 1 - RX, 16 objects, unicast to this node (filter 0)
+ *   FIFO 2 - RX, 16 objects, broadcasts (filters 1-4)
+ *   FIFO 3 - TX, 16 objects, all other frames (TXPRI 0, sent in order)
+ * Received frames stay in the RX FIFOs until CAN_get_msg() reads them (no RX interrupt, no software buffer).
  */
 
 #include <xc.h>
@@ -26,7 +28,8 @@
 #define CANFD_FIFO_RX_UNICAST   1
 #define CANFD_FIFO_RX_BROADCAST 2
 
-#define CANFD_FIFO_DEPTH        8
+#define CANFD_FIFO_DEPTH        16          // FIFO 1-3, 1-32 objects (FSIZE + 1)
+#define CANFD_TXQ_DEPTH         4
 #define CANFD_RAM_ADDR          0x3800      // CAN message RAM 0x3800-0x3FFF (CxFIFOBA must be >= 0x3800), not used by the compiler
 
 static void canfd_set_mode(uint8_t mode) {
@@ -82,30 +85,22 @@ static uint8_t canfd_rx_read(volatile uint8_t *obj, uint8_t *ecan_id, uint8_t *d
     return dlc;
 }
 
-static void rx_frame(volatile uint8_t *obj) {
-    can_buf_t *b = can_rx_slot();
-    if (b != NULL) {                // NULL: buffer full, the frame is dropped
-        b->dlc = canfd_rx_read(obj, b->id, b->data);
-        can_rx_commit();
+uint8_t can_hw_rx(can_buf_t *frame) {
+    if (C1FIFOSTA1Lbits.TFNRFNIF) {         // unicast FIFO not empty
+        frame->dlc = canfd_rx_read(canfd_obj((uint16_t)C1FIFOUA1), frame->id, frame->data);
+        C1FIFOCON1Hbits.UINC = 1;           // release the object
+        return 1;
     }
-}
-
-// Vectored interrupt (MVECEN = ON, IVTBASE = 0x0008), low priority; CANRXIF is cleared by hardware when the RX FIFOs are empty
-void __interrupt(irq(CANRX), base(8), low_priority) can_rx_isr(void) {
-    while (C1FIFOSTA1Lbits.TFNRFNIF) {
-        rx_frame(canfd_obj((uint16_t)C1FIFOUA1));
-        C1FIFOCON1Hbits.UINC = 1;
-    }
-    while (C1FIFOSTA2Lbits.TFNRFNIF) {
-        rx_frame(canfd_obj((uint16_t)C1FIFOUA2));
+    if (C1FIFOSTA2Lbits.TFNRFNIF) {         // broadcast FIFO not empty
+        frame->dlc = canfd_rx_read(canfd_obj((uint16_t)C1FIFOUA2), frame->id, frame->data);
         C1FIFOCON2Hbits.UINC = 1;
+        return 1;
     }
+    return 0;
 }
 
-// TX FIFO 3 not full, queues an extended frame
-static void canfd_tx_write(const uint8_t *ecan_id, uint8_t dlc, const uint8_t *data) {
-    volatile uint8_t *obj = canfd_obj((uint16_t)C1FIFOUA3);
-
+// TX message object (TXQ / FIFO 3 user address) <- extended frame, the caller sets UINC | TXREQ
+static void canfd_tx_write(volatile uint8_t *obj, const uint8_t *ecan_id, uint8_t dlc, const uint8_t *data) {
     canfd_id(ecan_id, obj);
     obj[3] &= 0x1f;                 // EID[17:13] only (SID11 = 0)
     obj[4] = 0x10 | (dlc & 0x0f);   // IDE, CAN 2.0 frame
@@ -114,8 +109,11 @@ static void canfd_tx_write(const uint8_t *ecan_id, uint8_t dlc, const uint8_t *d
     obj[7] = 0;
     for (uint8_t i = 0; i < 8; ++i)
         obj[8 + i] = data[i];
+}
 
-    C1FIFOCON3H |= _C1FIFOCON3H_UINC_MASK | _C1FIFOCON3H_TXREQ_MASK;
+static void canfd_txq_write(const uint8_t *ecan_id, uint8_t dlc, const uint8_t *data) {
+    canfd_tx_write(canfd_obj((uint16_t)C1TXQUA), ecan_id, dlc, data);
+    C1TXQCONH |= _C1TXQCONH_UINC_MASK | _C1TXQCONH_TXREQ_MASK;
 }
 
 void can_hw_init(uint8_t node_id, uint16_t node_type) {
@@ -131,7 +129,7 @@ void can_hw_init(uint8_t node_id, uint16_t node_type) {
 
     C1CONL = 0x00;                  // CLKSEL0 = 0: FOSC, DNCNT 0
     C1CONH = _C1CONH_ON_MASK | _C1CONH_BRSDIS_MASK;
-    C1CONU = 0x00;                  // TXQEN = 0, STEF = 0, RTXAT = 0 (unlimited retransmissions)
+    C1CONU = _C1CONU_TXQEN_MASK;    // TXQ, STEF = 0, RTXAT = 0 (unlimited retransmissions)
 
     /**
         Baud rate: 125kbps
@@ -148,12 +146,16 @@ void can_hw_init(uint8_t node_id, uint16_t node_type) {
     C1FIFOBA = CANFD_RAM_ADDR;
 
     // PLSIZE = 0 (8 B), FSIZE = depth - 1
-    C1FIFOCON1L = _C1FIFOCON1L_TFNRFNIE_MASK;       // RX
+    C1TXQCONL = 0x00;                               // TX (TXEN is fixed to 1), no interrupts
+    C1TXQCONT = CANFD_TXQ_DEPTH - 1;
+    C1TXQCONUbits.TXPRI = 1;                        // before FIFO 3
+    C1FIFOCON1L = 0x00;                             // RX, no interrupts
     C1FIFOCON1T = CANFD_FIFO_DEPTH - 1;
-    C1FIFOCON2L = _C1FIFOCON2L_TFNRFNIE_MASK;       // RX
+    C1FIFOCON2L = 0x00;                             // RX, no interrupts
     C1FIFOCON2T = CANFD_FIFO_DEPTH - 1;
     C1FIFOCON3L = _C1FIFOCON3L_TXEN_MASK;           // TX
     C1FIFOCON3T = CANFD_FIFO_DEPTH - 1;
+    C1FIFOCON3Ubits.TXPRI = 0;
 
     // filters are undefined after reset, disable all
     C1FLTCON0L = 0; C1FLTCON0H = 0; C1FLTCON0U = 0; C1FLTCON0T = 0;
@@ -166,20 +168,14 @@ void can_hw_init(uint8_t node_id, uint16_t node_type) {
     calc_can_unicast_id(&id[0], &id[1], &id[2], &id[3], H9FRAME_UNICAST_MSG_TYPE_GROUP, 0, 0, node_id, 0);
     canfd_set_filter(&C1FLTCON0L, &C1FLTOBJ0L, &C1MASK0L, CANFD_FIFO_RX_UNICAST, id, mask);
 
-    // filters 1-4 -> FIFO 2: all broadcast types (16-31) for a given group; DISCOVER/GROUP_RESET are picked out in process_msg
-    // (filters 3, 4 are placeholders until CAN_set_msg_filter_1/2)
-    calc_can_broadcast_id(&mask[0], &mask[1], &mask[2], &mask[3], H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, H9FRAME_NODE_TYPE_MASK);
-    calc_can_broadcast_id(&id[0], &id[1], &id[2], &id[3], H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, 0, H9FRAME_BROADCAST_ALL_GROUP);
+    // filters 1, 2 -> FIFO 2: special broadcasts (DISCOVER, GROUP_RESET) to all nodes and to this node type
+    calc_can_broadcast_id(&mask[0], &mask[1], &mask[2], &mask[3], H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP_MASK, 0, H9FRAME_NODE_TYPE_MASK);
+    calc_can_broadcast_id(&id[0], &id[1], &id[2], &id[3], H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, H9FRAME_BROADCAST_ALL_GROUP);
     canfd_set_filter(&C1FLTCON0H, &C1FLTOBJ1L, &C1MASK1L, CANFD_FIFO_RX_BROADCAST, id, mask);
-    calc_can_broadcast_id(&id[0], &id[1], &id[2], &id[3], H9FRAME_ALL_BROADCAST_MSG_TYPE_GROUP, 0, node_type);
+    calc_can_broadcast_id(&id[0], &id[1], &id[2], &id[3], H9FRAME_SPECIAL_BROADCAST_MSG_TYPE_GROUP, 0, node_type);
     canfd_set_filter(&C1FLTCON0U, &C1FLTOBJ2L, &C1MASK2L, CANFD_FIFO_RX_BROADCAST, id, mask);
-    canfd_set_filter(&C1FLTCON0T, &C1FLTOBJ3L, &C1MASK3L, CANFD_FIFO_RX_BROADCAST, id, mask);
-    canfd_set_filter(&C1FLTCON1L, &C1FLTOBJ4L, &C1MASK4L, CANFD_FIFO_RX_BROADCAST, id, mask);
 
-    C1INTUbits.RXIE = 1;
-    PIR4bits.CANRXIF = 0;
-    IPR4bits.CANRXIP = 0;   //low priority
-    PIE4bits.CANRXIE = 1;
+    // filters 3, 4 -> FIFO 2: all broadcast types for a given group, disabled until CAN_set_msg_filter_1/2
 
     canfd_set_mode(CANFD_MODE_NORMAL_20);
 }
@@ -211,21 +207,25 @@ uint8_t can_hw_rx_overflow(void) {
     return overflow;
 }
 
-uint8_t can_hw_tx(const uint8_t *id, uint8_t dlc, const uint8_t *data) {
+uint8_t can_hw_tx(const uint8_t *id, uint8_t dlc, const uint8_t *data, uint8_t urgent) {
+    if (urgent) {
+        if (!C1TXQSTALbits.TXQNIF)  // TXQ full
+            return 0;
+        canfd_txq_write(id, dlc, data);
+        return 1;
+    }
+
     if (!C1FIFOSTA3Lbits.TFNRFNIF)  // TX FIFO full
         return 0;
-    canfd_tx_write(id, dlc, data);
+    canfd_tx_write(canfd_obj((uint16_t)C1FIFOUA3), id, dlc, data);
+    C1FIFOCON3H |= _C1FIFOCON3H_UINC_MASK | _C1FIFOCON3H_TXREQ_MASK;
     return 1;
 }
 
 void can_hw_tx_on_bus_error(const uint8_t *id, uint8_t dlc, const uint8_t *data) {
-    // drop all frames waiting in the TX FIFO
-    C1FIFOCON3Hbits.TXREQ = 0;
-    for (uint16_t t = 0xffff; t && C1FIFOCON3Hbits.TXREQ; --t);
-    C1FIFOCON3Hbits.FRESET = 1;
-    for (uint16_t t = 0xffff; t && C1FIFOCON3Hbits.FRESET; --t);
-
-    canfd_tx_write(id, dlc, data);  // waits in the TX FIFO, sent automatically after bus-off recovery
+    // frames in FIFO 3 are kept and sent after bus-off recovery, behind the fault frame
+    if (C1TXQSTALbits.TXQEIF)       // no fault frame waiting yet
+        canfd_txq_write(id, dlc, data);
 }
 
 #endif /* _18FXXQ84_FAMILY_ */

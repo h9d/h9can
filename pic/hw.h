@@ -23,24 +23,24 @@ typedef struct {
     uint8_t data[8];
 } can_buf_t;
 
-// can.c, for the CAN RX interrupt: free RX buffer slot or NULL when the buffer is full (frame loss is reported)
-can_buf_t *can_rx_slot(void);
-void can_rx_commit(void);
-
 /* --- CAN controller --- */
 
-// Pins, bit timing (125 kbps), acceptance filters, RX interrupts (low priority), leaves the controller in Normal mode
+// Pins, bit timing (125 kbps), acceptance filters (K80: RX interrupts, low priority), leaves the controller in Normal mode
 void can_hw_init(uint8_t node_id, uint16_t node_type);
 // n = 1, 2: broadcast group filters set by CAN_set_msg_filter_1/2
 void can_hw_set_broadcast_filter(uint8_t n, uint16_t broadcast_group);
 uint8_t can_hw_error_warning(void);
 // bus passive / bus off
 uint8_t can_hw_bus_error(void);
-// hardware RX overflow, the flags are cleared
+// Next received frame (unicast first), returns 0 when there is none
+uint8_t can_hw_rx(can_buf_t *frame);
+// RX frame lost since the last call (hardware overflow, K80 also its software buffer), the flags are cleared
 uint8_t can_hw_rx_overflow(void);
-// Queues an extended frame, returns 0 when all TX buffers are busy. Interrupts must be disabled.
-uint8_t can_hw_tx(const uint8_t *id, uint8_t dlc, const uint8_t *data);
-// Drops pending frame(s) and queues this one, it is sent automatically after bus-off recovery. Interrupts must be disabled.
+// Queues an extended frame, returns 0 when the TX buffers are busy. Interrupts must be disabled.
+// urgent (NODE_FAULT): Q84 sends it through the TXQ, ahead of the normal frames waiting in FIFO 3; K80 ignores it.
+uint8_t can_hw_tx(const uint8_t *id, uint8_t dlc, const uint8_t *data, uint8_t urgent);
+// Bus error with the TX buffers full: queues this fault frame, it is sent automatically after bus-off recovery
+// (K80: replaces the frame waiting in TXB2; Q84: TXQ, only if no fault is waiting there). Interrupts must be disabled.
 void can_hw_tx_on_bus_error(const uint8_t *id, uint8_t dlc, const uint8_t *data);
 
 /* --- MCU --- */
