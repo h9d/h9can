@@ -12,6 +12,7 @@
 #include <xc.h>
 
 extern void (*read_power_supply_register)(uint8_t destination_id, uint8_t seqnum);
+extern void (*read_mcu_temp_register)(uint8_t destination_id, uint8_t seqnum);
 
 #if defined(_18F66K80_FAMILY_)
 // Call from the low priority ISR (PIC18F-Q84: no RX interrupt, frames are read from the hardware FIFOs by CAN_get_msg)

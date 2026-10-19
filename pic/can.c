@@ -42,6 +42,8 @@ static struct {
 
 
 void (*read_power_supply_register)(uint8_t, uint8_t) = NULL;
+void (*read_mcu_temp_register)(uint8_t, uint8_t) = NULL;
+
 
 static void calc_can_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, h9frame_t *cm);
 static void calc_can_unicast_id(volatile uint8_t *id1, volatile uint8_t *id2, volatile uint8_t *id3, volatile uint8_t *id4, uint8_t type, uint8_t flags, uint8_t src, uint8_t dst, uint8_t seq);
@@ -442,8 +444,14 @@ static void process_standard_reg(h9frame_t *cm) {
                     send_command_error(H9FRAME_ERROR_UNSUPPORTED_REGISTER, cm->source_id, cm->unicast.seqnum);
                 }
                 return;
-            //case NODE_MCU_TEMP_STD_REGISTER:
-            //     return;
+            case NODE_MCU_TEMP_STD_REGISTER:
+                if (read_mcu_temp_register) {
+                    read_mcu_temp_register(cm->source_id, cm->unicast.seqnum);
+                }
+                else {
+                    send_command_error(H9FRAME_ERROR_UNSUPPORTED_REGISTER, cm->source_id, cm->unicast.seqnum);
+                }
+                return;
             case NODE_ID_STD_REGISTER:
                 send_reg_value1(NODE_ID_STD_REGISTER, cm->source_id, cm->unicast.seqnum, node_info.node_id);
                 return;
